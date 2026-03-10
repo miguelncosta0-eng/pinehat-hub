@@ -876,13 +876,9 @@ Hub._editorRenderClips = function () {
           <p class="editor-clips-info">
             Voiceover: ${Hub.fmtDur(st.voiceover.duration)} · ${st.episodes.length} episódios ·
             Clips de ${st.clipDurationMin}–${st.clipDurationMax}s
-            ${st.transcription ? ' · Transcrição disponível (match por episódio ativo)' : ''}
           </p>
         </div>
         <div style="display:flex;gap:8px;">
-          <button class="btn btn-secondary" id="editorAssignWithAiBtn" ${st.isGeneratingClips ? 'disabled' : ''} title="Usa a base de dados de séries para atribuir clips com IA">
-            🎯 Atribuir com IA
-          </button>
           <button class="btn btn-primary" id="editorGenerateClipsBtn" ${st.isGeneratingClips ? 'disabled' : ''}>
             ${st.isGeneratingClips ? '<span class="spinner"></span> A gerar...' : '🎬 Gerar Clips'}
           </button>
@@ -909,7 +905,6 @@ Hub._editorRenderClips = function () {
   `;
 
   content.querySelector('#editorGenerateClipsBtn').addEventListener('click', () => Hub._editorGenerateClips());
-  content.querySelector('#editorAssignWithAiBtn').addEventListener('click', () => Hub._editorOpenSeriesAssignModal());
   content.querySelector('#editorPrevStepClips').addEventListener('click', () => { st.currentStep = 'media'; Hub.renderEditor(); });
   content.querySelector('#editorNextStepClips').addEventListener('click', () => { st.currentStep = 'overlays'; Hub.renderEditor(); });
 };
