@@ -1339,6 +1339,12 @@ function register(mainWindow) {
         }
       }
 
+      // Clean text: remove trailing dots, UPPERCASE
+      for (const o of deduped) {
+        if (o.text) o.text = o.text.replace(/\.+$/, '').trim().toUpperCase();
+        if (o.numberLabel) o.numberLabel = o.numberLabel.replace(/\.+$/, '').trim().toUpperCase();
+      }
+
       // Assign colors from channel palette
       assignOverlayColors(deduped, channel || 'pinehat');
 
