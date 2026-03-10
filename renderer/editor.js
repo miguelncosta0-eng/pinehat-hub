@@ -1899,7 +1899,7 @@ Hub._editorRenderExport = function () {
 
       <div class="editor-export-extra">
         <label class="export-toggle-label">
-          <input type="checkbox" id="exportCaptionsToggle" ${st.captionsEnabled && st.transcription ? 'checked' : ''} ${!st.transcription ? 'disabled' : ''}>
+          <input type="checkbox" id="exportCaptionsToggle" ${st.captionsEnabled ? 'checked' : ''} ${!st.transcription ? 'disabled' : ''}>
           <span>Legendas por palavra ${!st.transcription ? '(requer transcrição)' : `(${st.transcription?.words?.length || 0} palavras)`}</span>
         </label>
       </div>

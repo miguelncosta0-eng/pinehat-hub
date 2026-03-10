@@ -1325,6 +1325,7 @@ function register(mainWindow) {
     const clips = [];
     let currentTime = 0;
     const usedSegments = {};
+    let lastEpisodePath = null;
 
     while (currentTime < voiceoverDuration) {
       const clipDuration = clipDurationMin + Math.random() * (clipDurationMax - clipDurationMin);
@@ -1335,10 +1336,16 @@ function register(mainWindow) {
 
       const effectiveDuration = Math.max(1.0, Math.min(clipDuration, remaining));
 
-      const targetEpisode = findEpisodeForTime(currentTime, episodeMentions, validEpisodes);
+      // Avoid using the same episode consecutively — pick a different one
+      let targetEpisode = findEpisodeForTime(currentTime, episodeMentions, validEpisodes);
+      if (validEpisodes.length > 1 && targetEpisode.path === lastEpisodePath) {
+        const others = validEpisodes.filter(ep => ep.path !== lastEpisodePath);
+        targetEpisode = others[Math.floor(Math.random() * others.length)];
+      }
       const clip = pickClipFromEpisode(targetEpisode, effectiveDuration, skipStart, skipEnd, usedSegments);
 
       if (clip) {
+        lastEpisodePath = clip.source;
         clips.push({
           id: uuid(),
           source: clip.source,
