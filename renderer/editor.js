@@ -136,6 +136,7 @@ Hub._editorRenderVoiceover = function () {
           <button class="btn btn-primary" id="editorTranscribeBtn" ${st.isTranscribing ? 'disabled' : ''}>
             ${st.isTranscribing ? '<span class="spinner"></span> A transcrever...' : `🎙️ Transcrever ${Hub.state.settings?.whisperMode === 'local' ? '(Local)' : '(API)'}`}
           </button>
+          <button class="btn btn-secondary" id="editorUseScriptBtn">📝 Usar Script</button>
           <button class="btn btn-secondary" id="editorNextStep">Próximo Passo →</button>
         </div>
         ${st.isRemovingSilence ? `
@@ -154,6 +155,7 @@ Hub._editorRenderVoiceover = function () {
     });
     content.querySelector('#editorSilenceBtn').addEventListener('click', () => Hub._editorRemoveSilence());
     content.querySelector('#editorTranscribeBtn').addEventListener('click', () => Hub._editorTranscribe());
+    content.querySelector('#editorUseScriptBtn').addEventListener('click', () => Hub._editorUseScript());
     content.querySelector('#editorNextStep').addEventListener('click', () => {
       st.currentStep = 'media';
       Hub.renderEditor();
@@ -592,6 +594,61 @@ Hub._editorTranscribe = async function () {
   }
 
   Hub._editorRenderStep('voiceover');
+};
+
+Hub._editorUseScript = async function () {
+  const st = Hub.state.editor;
+  if (!st.voiceover) return Hub.showToast('Adiciona um voiceover primeiro.', 'error');
+
+  // Get all scripts to show picker
+  const scripts = await window.api.getScripts();
+  if (!scripts || scripts.length === 0) return Hub.showToast('Nenhum script encontrado.', 'error');
+
+  // Show script selection modal
+  const backdrop = document.getElementById('modalBackdrop');
+  const modal = document.getElementById('modalContent');
+  modal.innerHTML = `
+    <h2>Selecionar Script</h2>
+    <p class="modal-desc">O texto do script será usado como transcrição, com timestamps distribuídos pela duração do áudio.</p>
+    <div class="script-list" style="max-height:300px;overflow-y:auto;margin:16px 0;">
+      ${scripts.map(s => `
+        <button class="btn btn-secondary script-pick-btn" data-id="${s.id}" style="display:block;width:100%;text-align:left;margin-bottom:8px;padding:10px 14px;">
+          <strong>${s.title}</strong>
+          <span style="opacity:0.5;margin-left:8px;">${(s.wordCount || s.content.split(/\\s+/).length)} palavras</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+  backdrop.classList.add('visible');
+
+  modal.querySelectorAll('.script-pick-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      backdrop.classList.remove('visible');
+      const script = await window.api.getScript(btn.dataset.id);
+      if (!script || !script.content) return Hub.showToast('Script vazio.', 'error');
+
+      // Build transcription from script text
+      const text = script.content.trim();
+      const wordsArr = text.split(/\s+/).filter(w => w.length > 0);
+      const duration = st.voiceover.duration || 60;
+      const timePerWord = duration / wordsArr.length;
+
+      const words = wordsArr.map((word, i) => ({
+        word,
+        start: +(i * timePerWord).toFixed(3),
+        end: +((i + 1) * timePerWord).toFixed(3),
+      }));
+
+      st.transcription = {
+        words,
+        fullText: text,
+        model: 'script',
+      };
+
+      Hub.showToast(`Script "${script.title}" usado como transcrição — ${words.length} palavras`, 'success');
+      Hub._editorRenderStep('voiceover');
+    });
+  });
 };
 
 Hub._editorTranscriptionHTML = function () {
