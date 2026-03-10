@@ -596,57 +596,81 @@ Hub._editorTranscribe = async function () {
   Hub._editorRenderStep('voiceover');
 };
 
+Hub._editorApplyScriptText = function (text) {
+  const st = Hub.state.editor;
+  const clean = text.trim();
+  if (!clean) return Hub.showToast('Texto vazio.', 'error');
+
+  const wordsArr = clean.split(/\s+/).filter(w => w.length > 0);
+  const duration = st.voiceover.duration || 60;
+  const timePerWord = duration / wordsArr.length;
+
+  st.transcription = {
+    words: wordsArr.map((word, i) => ({
+      word,
+      start: +(i * timePerWord).toFixed(3),
+      end: +((i + 1) * timePerWord).toFixed(3),
+    })),
+    fullText: clean,
+    model: 'script',
+  };
+
+  document.getElementById('modalBackdrop').classList.remove('visible');
+  Hub.showToast(`Script aplicado como transcrição — ${wordsArr.length} palavras`, 'success');
+  Hub._editorRenderStep('voiceover');
+};
+
 Hub._editorUseScript = async function () {
   const st = Hub.state.editor;
   if (!st.voiceover) return Hub.showToast('Adiciona um voiceover primeiro.', 'error');
 
-  // Get all scripts to show picker
   const scripts = await window.api.getScripts();
-  if (!scripts || scripts.length === 0) return Hub.showToast('Nenhum script encontrado.', 'error');
-
-  // Show script selection modal
   const backdrop = document.getElementById('modalBackdrop');
   const modal = document.getElementById('modalContent');
+
   modal.innerHTML = `
-    <h2>Selecionar Script</h2>
-    <p class="modal-desc">O texto do script será usado como transcrição, com timestamps distribuídos pela duração do áudio.</p>
-    <div class="script-list" style="max-height:300px;overflow-y:auto;margin:16px 0;">
-      ${scripts.map(s => `
-        <button class="btn btn-secondary script-pick-btn" data-id="${s.id}" style="display:block;width:100%;text-align:left;margin-bottom:8px;padding:10px 14px;">
-          <strong>${s.title}</strong>
-          <span style="opacity:0.5;margin-left:8px;">${(s.wordCount || s.content.split(/\\s+/).length)} palavras</span>
-        </button>
-      `).join('')}
+    <h2>Usar Script como Transcrição</h2>
+    <p class="modal-desc">Escreve/cola o texto ou seleciona um script existente.</p>
+    <textarea class="input" id="scriptTextArea" rows="8" placeholder="Cola ou escreve o teu script aqui..." style="width:100%;resize:vertical;margin:12px 0;font-size:14px;"></textarea>
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+      <button class="btn btn-primary" id="scriptTextApply">Aplicar Texto</button>
+      <span id="scriptWordCount" style="opacity:0.5;line-height:36px;"></span>
     </div>
+    ${scripts && scripts.length > 0 ? `
+      <div style="border-top:1px solid rgba(255,255,255,0.1);padding-top:12px;margin-top:4px;">
+        <p style="opacity:0.5;margin-bottom:8px;">Ou seleciona um script existente:</p>
+        <div class="script-list" style="max-height:200px;overflow-y:auto;">
+          ${scripts.map(s => `
+            <button class="btn btn-secondary script-pick-btn" data-id="${s.id}" style="display:block;width:100%;text-align:left;margin-bottom:6px;padding:8px 12px;">
+              <strong>${s.title}</strong>
+              <span style="opacity:0.5;margin-left:8px;">${s.wordCount || '?'} palavras</span>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
   `;
   backdrop.classList.add('visible');
 
+  // Word count live update
+  const textarea = modal.querySelector('#scriptTextArea');
+  const wordCountEl = modal.querySelector('#scriptWordCount');
+  textarea.addEventListener('input', () => {
+    const count = textarea.value.trim().split(/\s+/).filter(w => w).length;
+    wordCountEl.textContent = count > 0 ? `${count} palavras` : '';
+  });
+  textarea.focus();
+
+  // Apply typed/pasted text
+  modal.querySelector('#scriptTextApply').addEventListener('click', () => {
+    Hub._editorApplyScriptText(textarea.value);
+  });
+
+  // Pick existing script
   modal.querySelectorAll('.script-pick-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
-      backdrop.classList.remove('visible');
       const script = await window.api.getScript(btn.dataset.id);
-      if (!script || !script.content) return Hub.showToast('Script vazio.', 'error');
-
-      // Build transcription from script text
-      const text = script.content.trim();
-      const wordsArr = text.split(/\s+/).filter(w => w.length > 0);
-      const duration = st.voiceover.duration || 60;
-      const timePerWord = duration / wordsArr.length;
-
-      const words = wordsArr.map((word, i) => ({
-        word,
-        start: +(i * timePerWord).toFixed(3),
-        end: +((i + 1) * timePerWord).toFixed(3),
-      }));
-
-      st.transcription = {
-        words,
-        fullText: text,
-        model: 'script',
-      };
-
-      Hub.showToast(`Script "${script.title}" usado como transcrição — ${words.length} palavras`, 'success');
-      Hub._editorRenderStep('voiceover');
+      if (script && script.content) Hub._editorApplyScriptText(script.content);
     });
   });
 };
