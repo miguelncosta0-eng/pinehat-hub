@@ -1,0 +1,209 @@
+/* ── Series List ── */
+.series-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 900px;
+}
+
+.series-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 20px;
+  transition: border-color 0.15s;
+}
+.series-card:hover { border-color: var(--accent); }
+
+.sc-info { flex: 1; min-width: 0; }
+.sc-name { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.sc-path {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 8px;
+}
+.sc-stats { display: flex; gap: 6px; flex-wrap: wrap; }
+.sc-actions { display: flex; align-items: center; gap: 8px; }
+
+/* ── Series Detail ── */
+.series-detail-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+  padding: 0 2px;
+}
+.series-folder-path {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.series-analysis-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+}
+.series-analysis-status {
+  font-size: 13px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.series-progress-track {
+  width: 160px;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.series-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s;
+  width: 0%;
+}
+
+/* ── Episode List ── */
+.series-episode-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.series-ep-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  transition: border-color 0.15s;
+}
+.series-ep-row.analyzed { border-color: rgba(34, 197, 94, 0.2); }
+.series-ep-row.analyzing {
+  border-color: var(--accent);
+  background: rgba(139, 92, 246, 0.05);
+}
+
+.ep-code {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 60px;
+  font-family: monospace;
+}
+.ep-filename {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ep-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.ep-progress-text {
+  font-size: 11px;
+  color: var(--accent);
+}
+
+/* ── Episode Scene Expand ── */
+.ep-scenes-list {
+  padding: 8px 16px 10px 88px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: var(--bg);
+  border: 1px solid rgba(34, 197, 94, 0.15);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  margin-top: -4px;
+}
+.ep-scenes-list.hidden { display: none; }
+.ep-scene-item {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+.ep-scene-time {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--accent);
+  min-width: 40px;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+.ep-scene-desc { flex: 1; }
+
+/* ── Scene Preview (in modal) ── */
+.series-scene-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.series-scene-item {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 4px;
+}
+.scene-time {
+  color: var(--accent);
+  font-family: monospace;
+  min-width: 40px;
+  flex-shrink: 0;
+}
+.scene-desc { color: var(--text); line-height: 1.4; }
+
+/* ── AI Assignment Panel (in Editor) ── */
+.series-assign-panel {
+  background: rgba(139, 92, 246, 0.06);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 12px;
+}
+.series-assign-header {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: var(--accent);
+}
+.series-assign-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}

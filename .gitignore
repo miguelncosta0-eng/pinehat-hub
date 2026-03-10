@@ -1,0 +1,17 @@
+node_modules/
+dist/
+library/
+
+# User data (local to each machine)
+data/
+
+# Media files
+*.mp4
+*.mp3
+*.wav
+*.mkv
+*.avi
+
+# OS
+.DS_Store
+Thumbs.db

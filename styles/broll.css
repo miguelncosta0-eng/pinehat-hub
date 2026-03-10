@@ -1,0 +1,139 @@
+/* ── B-Roll Section ── */
+.broll-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.broll-settings {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.broll-output-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.broll-output-row label {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.broll-path-display {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Content area */
+.broll-content-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Drop zone */
+.broll-drop-zone {
+  margin: 16px;
+  padding: 40px 24px;
+  border: 2px dashed var(--text-dim);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.broll-drop-zone:hover { border-color: var(--accent); background: var(--accent-glow); }
+.broll-drop-zone.active { border-color: var(--accent); background: var(--accent-glow); }
+.broll-drop-zone.compact { padding: 14px 16px; margin: 10px 16px; }
+.broll-drop-zone .broll-drop-icon {
+  width: 48px; height: 48px; border-radius: 50%; background: var(--surface2);
+  display: flex; align-items: center; justify-content: center; margin-bottom: 4px;
+}
+.broll-drop-zone.compact .broll-drop-icon { width: 32px; height: 32px; margin-bottom: 0; }
+.broll-drop-zone .broll-drop-icon svg { width: 24px; height: 24px; color: var(--accent); }
+.broll-drop-zone.compact .broll-drop-icon svg { width: 16px; height: 16px; }
+.broll-drop-zone h3 { font-size: 14px; font-weight: 500; margin: 0; color: var(--text); }
+.broll-drop-zone.compact h3 { font-size: 12px; }
+.broll-drop-zone p { font-size: 11px; color: var(--text-dim); margin: 0; }
+.broll-drop-zone .broll-browse-btn { margin-top: 6px; }
+.broll-drop-zone.compact .broll-browse-btn { display: none; }
+.broll-drop-zone.compact p { display: none; }
+
+/* File list */
+.broll-file-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 16px 12px;
+  min-height: 0;
+}
+.broll-file-list-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 0; margin-bottom: 4px;
+}
+.broll-file-list-header h4 { font-size: 11px; color: var(--text-dim); font-weight: 400; }
+
+.broll-file-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); margin-bottom: 4px;
+}
+.broll-file-icon {
+  width: 28px; height: 28px; border-radius: 6px; background: var(--accent-glow);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.broll-file-icon svg { width: 14px; height: 14px; color: var(--accent); }
+.broll-file-icon.img { background: rgba(34,197,94,0.08); }
+.broll-file-icon.img svg { color: var(--green); }
+.broll-file-info { flex: 1; min-width: 0; }
+.broll-file-name { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.broll-file-meta { font-size: 10px; color: var(--text-dim); margin-top: 1px; }
+.broll-file-remove { flex-shrink: 0; }
+.broll-file-remove svg { width: 16px; height: 16px; }
+.broll-file-remove:hover { color: #ef4444 !important; background: rgba(239, 68, 68, 0.1) !important; }
+
+/* Action bar */
+.broll-action-bar {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.broll-action-bar.visible { display: flex; }
+.broll-action-bar .broll-summary { font-size: 12px; color: var(--text-dim); }
+.broll-action-bar .broll-summary strong { color: var(--text); }
+.broll-action-bar .btn-primary {
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 600;
+}

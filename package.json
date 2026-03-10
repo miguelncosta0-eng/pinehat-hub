@@ -1,0 +1,87 @@
+{
+  "name": "pinehat-hub",
+  "version": "2.0.0",
+  "description": "YouTube Production Hub — Scripts, B-Roll, Projects",
+  "main": "main.js",
+  "author": "PineHat",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "postinstall": "node scripts/patch-msedge-tts.js",
+    "build": "electron-builder --win",
+    "build:dir": "electron-builder --win --dir",
+    "build:mac": "electron-builder --mac",
+    "build:mac:dir": "electron-builder --mac --dir"
+  },
+  "build": {
+    "appId": "com.pinehat.hub",
+    "productName": "PineHat Hub",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "main/**/*",
+      "renderer/**/*",
+      "styles/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "library",
+        "to": "library",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "signAndEditExecutable": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "category": "public.app-category.video"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PineHat Hub"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "miguelncosta0-eng",
+      "repo": "pinehat-hub"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3",
+    "msedge-tts": "^2.0.4",
+    "yt-transcript-api": "^1.0.8"
+  }
+}

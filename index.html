@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PineHat Hub</title>
+  <link rel="stylesheet" href="styles/base.css">
+  <link rel="stylesheet" href="styles/components.css">
+  <link rel="stylesheet" href="styles/sidebar.css">
+  <link rel="stylesheet" href="styles/dashboard.css">
+  <link rel="stylesheet" href="styles/scripts.css">
+  <link rel="stylesheet" href="styles/broll.css">
+  <link rel="stylesheet" href="styles/editor.css">
+  <link rel="stylesheet" href="styles/projects.css">
+  <link rel="stylesheet" href="styles/competitors.css">
+  <link rel="stylesheet" href="styles/settings.css">
+  <link rel="stylesheet" href="styles/series.css">
+</head>
+<body data-channel="pinehat">
+  <div class="app">
+    <!-- ══════ SIDEBAR ══════ -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1 class="app-title"><span>Pine Hat</span> Hub</h1>
+      </div>
+      <nav class="sidebar-nav" id="sidebarNav">
+        <!-- Rendered by app.js -->
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <div class="channel-selector" id="channelSelector">
+        <!-- Rendered by app.js -->
+      </div>
+      <button class="nav-item nav-settings" id="settingsNav" data-section="settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Definições
+      </button>
+    </aside>
+
+    <!-- ══════ MAIN PANEL ══════ -->
+    <main class="main-panel">
+      <div class="section-panel active" id="panel-dashboard"></div>
+      <div class="section-panel" id="panel-scripts"></div>
+      <div class="section-panel" id="panel-broll"></div>
+      <div class="section-panel" id="panel-editor"></div>
+      <div class="section-panel" id="panel-projects"></div>
+      <div class="section-panel" id="panel-competitors"></div>
+      <div class="section-panel" id="panel-series"></div>
+      <div class="section-panel" id="panel-settings"></div>
+    </main>
+
+    <!-- ══════ LIVE PREVIEW ══════ -->
+    <div class="gen-preview" id="genPreview">
+      <div class="gen-preview-header" id="genPreviewToggle">
+        <span class="gen-preview-title">✍️ A escrever...</span>
+        <span class="gen-preview-collapse" id="genPreviewCollapse">▾</span>
+      </div>
+      <div class="gen-preview-body" id="genPreviewBody">
+        <div class="gen-preview-text" id="genPreviewText"></div>
+      </div>
+    </div>
+
+    <!-- ══════ GENERATION BAR ══════ -->
+    <div class="gen-bar" id="genBar">
+      <span class="gen-bar-phase" id="genBarPhase">A gerar...</span>
+      <div class="gen-bar-track"><div class="gen-bar-fill" id="genBarFill"></div></div>
+      <span class="gen-bar-percent" id="genBarPercent">0%</span>
+      <span class="gen-bar-eta" id="genBarEta"></span>
+      <button class="gen-bar-cancel" id="genBarCancel" title="Cancelar">✕</button>
+    </div>
+  </div>
+
+  <!-- ══════ MODAL ══════ -->
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal" id="modalContent"></div>
+  </div>
+
+  <!-- ══════ PROGRESS OVERLAY ══════ -->
+  <div class="progress-overlay" id="progressOverlay">
+    <h2 id="progressTitle">A processar...</h2>
+    <div class="phase" id="progressPhase">A preparar...</div>
+    <div class="progress-big-bar"><div class="progress-big-fill" id="progressFill"></div></div>
+    <div class="progress-percent" id="progressPercent">0%</div>
+    <div class="progress-detail" id="progressDetail"></div>
+    <button class="btn btn-cancel" id="cancelProgressBtn" style="margin-top:10px;">Cancelar</button>
+  </div>
+
+  <!-- ══════ EXPORT FLOATING BAR ══════ -->
+  <div class="export-float-bar" id="exportFloatBar">
+    <div class="efb-icon">🎬</div>
+    <div class="efb-info">
+      <div class="efb-title" id="efbTitle">A exportar vídeo...</div>
+      <div class="efb-detail" id="efbDetail">A preparar...</div>
+    </div>
+    <div class="efb-progress">
+      <div class="efb-bar"><div class="efb-fill" id="efbFill"></div></div>
+      <span class="efb-percent" id="efbPercent">0%</span>
+    </div>
+    <button class="btn-icon efb-cancel" id="efbCancel" title="Cancelar exportação">&times;</button>
+  </div>
+
+  <!-- ══════ TOASTS ══════ -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- ══════ RENDERER SCRIPTS ══════ -->
+  <script src="renderer/state.js"></script>
+  <script src="renderer/utils.js"></script>
+  <script src="renderer/app.js"></script>
+  <script src="renderer/dashboard.js"></script>
+  <script src="renderer/scripts.js"></script>
+  <script src="renderer/broll.js"></script>
+  <script src="renderer/editor.js"></script>
+  <script src="renderer/projects.js"></script>
+  <script src="renderer/chart.js"></script>
+  <script src="renderer/competitors.js"></script>
+  <script src="renderer/series.js"></script>
+  <script src="renderer/settings.js"></script>
+</body>
+</html>
