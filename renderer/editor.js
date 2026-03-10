@@ -1174,13 +1174,13 @@ Hub._editorShowOverlayPreview = function (index) {
 
   controls.style.display = '';
   const textColor = overlay.color || '#ffffff';
-  const fontSize = Math.round((overlay.fontSize || 72) * 0.45);
+  const fontSize = Math.round((overlay.fontSize || 48) * 0.45);
   const dur = overlay.duration || 3;
   const animClass = overlay.animation === 'auto' ? 'fade-zoom' : (overlay.animation || 'fade-zoom');
 
   function renderPreview() {
     const c = overlay.color || '#ffffff';
-    const fs = Math.round((overlay.fontSize || 72) * 0.45);
+    const fs = Math.round((overlay.fontSize || 48) * 0.45);
     const ac = overlay.animation === 'auto' ? 'fade-zoom' : (overlay.animation || 'fade-zoom');
     const d = overlay.duration || 3;
 
@@ -1213,8 +1213,8 @@ Hub._editorShowOverlayPreview = function (index) {
 
   animSel.value = overlay.animation || 'auto';
   colorIn.value = overlay.color || '#ffffff';
-  fontSlider.value = overlay.fontSize || 72;
-  fontVal.textContent = overlay.fontSize || 72;
+  fontSlider.value = overlay.fontSize || 48;
+  fontVal.textContent = overlay.fontSize || 48;
   durIn.value = overlay.duration || 3;
   textIn.value = overlay.text;
 
@@ -1386,7 +1386,7 @@ Hub._editorAddOverlayManual = function () {
       duration: parseFloat(modal.querySelector('#overlayDuration').value) || 3,
       animation: modal.querySelector('#overlayAnimation').value,
       color: modal.querySelector('#overlayColor').value,
-      fontSize: 72,
+      fontSize: 48,
       isCountingNumber: modal.querySelector('#overlayIsCountingNumber')?.checked || false,
       numberValue: parseFloat(modal.querySelector('#overlayNumberValue')?.value) || null,
       numberLabel: modal.querySelector('#overlayNumberLabel')?.value || null,

@@ -549,7 +549,7 @@ function buildOverlayFilter(overlay, fontFile) {
   const start = overlay.startTime;
   const dur = overlay.duration || 3;
   const end = start + dur;
-  const fontSize = overlay.fontSize || 72;
+  const fontSize = overlay.fontSize || 48;
   const color = (overlay.color || '#ffffff').replace('#', '');
   const entryDur = 0.4;
   const exitLocal = dur - 0.4;
@@ -637,7 +637,7 @@ function buildCountingOverlayFilter(overlay, fontFile) {
     const displayNum = isFloat ? currentNum.toFixed(1) : Math.round(currentNum).toString();
     const displayText = escapeDrawtext(`${prefix}${displayNum}${unit ? ' ' + unit : ''}`);
 
-    filter += `,drawtext=fontfile='${fontFile}':text='${displayText}':fontsize=96:fontcolor=0x${color}:x=(w-tw)/2:y=(h-th)/2-40:enable='between(t\\,${t0}\\,${t1})'`;
+    filter += `,drawtext=fontfile='${fontFile}':text='${displayText}':fontsize=64:fontcolor=0x${color}:x=(w-tw)/2:y=(h-th)/2-40:enable='between(t\\,${t0}\\,${t1})'`;
   }
 
   // Label below (visible during entire overlay)
@@ -1288,7 +1288,7 @@ function register(mainWindow) {
                 duration: o.duration || 3,
                 animation: 'auto',
                 color: null,
-                fontSize: 72,
+                fontSize: 48,
                 isCountingNumber: o.isCountingNumber || false,
                 numberValue: o.numberValue || null,
                 numberLabel: o.numberLabel || null,
@@ -1621,7 +1621,7 @@ function register(mainWindow) {
           if (!o.text || typeof o.text !== 'string') o.text = 'Overlay';
           if (!o.duration || isNaN(o.duration) || o.duration <= 0) o.duration = 3;
           if (o.startTime == null || isNaN(o.startTime)) o.startTime = 0;
-          if (o.fontSize && isNaN(o.fontSize)) o.fontSize = 72;
+          if (o.fontSize && isNaN(o.fontSize)) o.fontSize = 48;
         }
         assignOverlayColors(overlays, channel);
       }
