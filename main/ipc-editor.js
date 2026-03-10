@@ -185,16 +185,14 @@ function getWhisperBinPath() {
     const p = path.join(WHISPER_BIN_DIR, name);
     if (fs.existsSync(p)) return p;
   }
-  // Check subdirectories (zip may extract into a folder)
+  // Check subdirectories (zip may extract into a folder) — prefer whisper-cli over main
   if (fs.existsSync(WHISPER_BIN_DIR)) {
     try {
-      const ext = IS_WIN ? '.exe' : '';
-      const entries = fs.readdirSync(WHISPER_BIN_DIR, { recursive: true });
-      for (const entry of entries) {
-        const s = String(entry);
-        if (/whisper|main/.test(s) && (!ext || s.endsWith(ext))) {
-          return path.join(WHISPER_BIN_DIR, s);
-        }
+      const entries = fs.readdirSync(WHISPER_BIN_DIR, { recursive: true }).map(String);
+      // Search in priority order
+      for (const name of candidates) {
+        const match = entries.find(e => path.basename(e) === name);
+        if (match) return path.join(WHISPER_BIN_DIR, match);
       }
     } catch (_) {}
   }
