@@ -458,12 +458,12 @@ function register(mainWindow) {
     const analyzed = series.episodes.filter(ep => ep.analyzed && ep.scenes.length > 0);
     if (analyzed.length === 0) return { success: false, error: 'Nenhum episódio analisado. Analisa os episódios primeiro.' };
 
-    // Build episode context (compact) — limit to 2 best scenes per episode to keep prompt short
+    // Build episode context with scene timestamps
     const episodeCtx = analyzed.map(ep => {
       const sceneList = ep.scenes
         .filter(s => s.description)
-        .map(s => `  ${Math.floor(s.time / 60)}min: ${s.description}`)
-        .slice(0, 3)
+        .map(s => `  ${s.time}s: ${s.description.split('\n')[0].replace(/^#+\s*/, '').slice(0, 80)}`)
+        .slice(0, 5)
         .join('\n');
       return `${ep.code}:\n${sceneList}`;
     }).join('\n');
@@ -495,16 +495,16 @@ function register(mainWindow) {
             role: 'user',
             content: `You are assigning B-roll footage to a YouTube voiceover video about "${series.name}".
 
-EPISODE SCENES DATABASE:
+EPISODE SCENES DATABASE (episode code + scenes with timestamps in seconds):
 ${episodeCtx}
 
 VOICEOVER SEGMENTS:
 ${segmentList}
 
-For each numbered segment, pick the most contextually relevant episode code from the database.
-Return ONLY a JSON array with one episode code per segment, in order. No explanation, no markdown.
-Example: ["S01E01", "S01E03", "S02E05"]
-Use only codes that exist in the database above.`,
+For each numbered segment, pick the most contextually relevant episode AND scene timestamp.
+Return ONLY a JSON array of objects with "ep" (episode code) and "t" (scene timestamp in seconds).
+Example: [{"ep":"S01E01","t":90},{"ep":"S01E03","t":210}]
+Use only episode codes and timestamps that exist in the database above. No explanation, no markdown.`,
           }],
         }),
       });
@@ -521,8 +521,15 @@ Use only codes that exist in the database above.`,
         // Find the largest JSON array in the response (greedy match)
         const match = text.match(/\[[\s\S]*\]/);
         if (!match) throw new Error('No JSON array in response: ' + text.slice(0, 200));
-        const batchAssignments = JSON.parse(match[0]);
-        allAssignments.push(...batchAssignments);
+        const parsed = JSON.parse(match[0]);
+        // Support both old format ["S01E01"] and new format [{"ep":"S01E01","t":90}]
+        for (const item of parsed) {
+          if (typeof item === 'string') {
+            allAssignments.push({ ep: item, t: null });
+          } else {
+            allAssignments.push({ ep: item.ep || item.episode || '', t: item.t ?? item.time ?? null });
+          }
+        }
       } catch (err) {
         return { success: false, error: 'Erro ao processar resposta: ' + err.message };
       }

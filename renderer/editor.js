@@ -2316,10 +2316,13 @@ Hub._editorRunAIAssignment = async function (seriesId) {
   const clips = [];
   let timelinePos = 0;
 
-  result.assignments.forEach((code, i) => {
+  let lastEpPath = null;
+  result.assignments.forEach((assignment, i) => {
     if (i >= segments.length) return;
     const seg = segments[i];
     const segDur = seg.endTime - seg.startTime;
+    const code = assignment.ep || assignment;
+    const sceneTime = assignment.t;
 
     // Find episode in current episodes list
     let episode = epMap[code];
@@ -2333,27 +2336,38 @@ Hub._editorRunAIAssignment = async function (seriesId) {
       }
     }
 
-    // Fallback: pick a random episode from the media list to avoid gaps
+    // Fallback: pick a random episode (different from last) to avoid gaps
     if (!episode && st.episodes.length > 0) {
-      episode = st.episodes[Math.floor(Math.random() * st.episodes.length)];
+      const others = st.episodes.filter(ep => ep.path !== lastEpPath);
+      episode = (others.length > 0 ? others : st.episodes)[Math.floor(Math.random() * (others.length || st.episodes.length))];
       episodeLabel = episode.label || episode.name;
     }
 
     if (!episode) return;
 
-    // Fill the segment duration with clips of random duration
+    // Fill the segment duration with clips
     let remaining = segDur;
+    let sceneUsed = false;
     while (remaining > 0.5) {
       const clipDur = Math.min(
         st.clipDurationMin + Math.random() * (st.clipDurationMax - st.clipDurationMin),
         remaining
       );
 
-      // Pick a random start within the episode (skip first/last 30s)
-      const margin = Math.min(30, episode.duration * 0.1);
-      const usable = Math.max(0, episode.duration - margin * 2 - clipDur);
-      const startTime = margin + Math.random() * usable;
+      let startTime;
+      if (sceneTime != null && !sceneUsed) {
+        // Use AI-selected scene timestamp (with small random offset for variation)
+        const offset = (Math.random() - 0.5) * 10; // ±5 seconds variation
+        startTime = Math.max(0, Math.min(sceneTime + offset, episode.duration - clipDur));
+        sceneUsed = true;
+      } else {
+        // Random position within episode (skip first/last 30s)
+        const margin = Math.min(30, episode.duration * 0.1);
+        const usable = Math.max(0, episode.duration - margin * 2 - clipDur);
+        startTime = margin + Math.random() * usable;
+      }
 
+      lastEpPath = episode.path;
       clips.push({
         id: Math.random().toString(36).slice(2),
         source: episode.path,
