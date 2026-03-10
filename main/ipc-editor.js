@@ -101,7 +101,12 @@ function runFfmpeg(ffmpegPath, args, onProgress, timeoutMs = 120000) {
 
 // ── Whisper Local (whisper.cpp) ──
 
-const WHISPER_BIN_URL = 'https://github.com/ggerganov/whisper.cpp/releases/latest/download/whisper-blas-bin-x64.zip';
+const IS_MAC = process.platform === 'darwin';
+const IS_WIN = process.platform === 'win32';
+
+const WHISPER_BIN_URL = IS_WIN
+  ? 'https://github.com/ggerganov/whisper.cpp/releases/latest/download/whisper-blas-bin-x64.zip'
+  : null; // Mac uses brew install whisper-cpp
 
 const WHISPER_MODEL_URLS = {
   base: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
@@ -146,11 +151,36 @@ function downloadFile(url, destPath, onProgress) {
 function extractZip(zipPath, destDir) {
   const { execSync } = require('child_process');
   if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-  execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`, { encoding: 'utf-8', timeout: 60000 });
+  if (IS_WIN) {
+    execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`, { encoding: 'utf-8', timeout: 60000 });
+  } else {
+    execSync(`unzip -o "${zipPath}" -d "${destDir}"`, { encoding: 'utf-8', timeout: 60000 });
+  }
 }
 
 function getWhisperBinPath() {
-  const candidates = ['main.exe', 'whisper.exe', 'whisper-cli.exe'];
+  // On Mac, check if installed via Homebrew or in PATH first
+  if (!IS_WIN) {
+    const { execSync } = require('child_process');
+    const candidates = ['whisper-cpp', 'whisper-cli', 'whisper', 'main'];
+    for (const name of candidates) {
+      try {
+        const p = execSync(`which ${name}`, { encoding: 'utf-8' }).trim();
+        if (p) return p;
+      } catch (_) {}
+    }
+    // Also check Homebrew common paths
+    const brewPaths = ['/usr/local/bin/whisper-cpp', '/opt/homebrew/bin/whisper-cpp',
+      '/usr/local/bin/whisper-cli', '/opt/homebrew/bin/whisper-cli'];
+    for (const p of brewPaths) {
+      if (fs.existsSync(p)) return p;
+    }
+  }
+
+  // Check local whisper-bin directory
+  const candidates = IS_WIN
+    ? ['whisper-cli.exe', 'whisper.exe', 'main.exe']
+    : ['whisper-cpp', 'whisper-cli', 'whisper', 'main'];
   for (const name of candidates) {
     const p = path.join(WHISPER_BIN_DIR, name);
     if (fs.existsSync(p)) return p;
@@ -158,10 +188,12 @@ function getWhisperBinPath() {
   // Check subdirectories (zip may extract into a folder)
   if (fs.existsSync(WHISPER_BIN_DIR)) {
     try {
+      const ext = IS_WIN ? '.exe' : '';
       const entries = fs.readdirSync(WHISPER_BIN_DIR, { recursive: true });
       for (const entry of entries) {
-        if (String(entry).endsWith('.exe') && (/main|whisper/.test(String(entry)))) {
-          return path.join(WHISPER_BIN_DIR, String(entry));
+        const s = String(entry);
+        if (/whisper|main/.test(s) && (!ext || s.endsWith(ext))) {
+          return path.join(WHISPER_BIN_DIR, s);
         }
       }
     } catch (_) {}
@@ -177,6 +209,11 @@ function getWhisperModelPath(size) {
 async function ensureWhisperBin(onProgress) {
   let binPath = getWhisperBinPath();
   if (binPath) return binPath;
+
+  // On Mac, whisper.cpp must be installed via Homebrew
+  if (!IS_WIN) {
+    throw new Error('whisper.cpp não encontrado. Instala no terminal com: brew install whisper-cpp');
+  }
 
   onProgress({ phase: 'downloading-bin', percent: 0, detail: 'A descarregar whisper.cpp...' });
   const zipPath = path.join(WHISPER_BIN_DIR, 'whisper.zip');
@@ -243,11 +280,12 @@ function parseWhisperCppJson(raw, modelSize) {
   return { words, fullText: textParts.join(' ').replace(/\s+/g, ' ').trim(), model: `whisper.cpp-${modelSize}` };
 }
 
-function whisperLocalTranscribe(wavPath, binPath, modelPath, modelSize) {
+function whisperLocalTranscribe(wavPath, binPath, modelPath, modelSize, langFlag) {
+  const lf = langFlag || '-l';
   return new Promise((resolve, reject) => {
     const outputBase = wavPath.replace(/\.wav$/i, '');
     const threads = Math.max(1, Math.min(os.cpus().length - 1, 8));
-    const args = ['-m', modelPath, '-f', wavPath, '--output-json-full', '--output-file', outputBase, '-l', 'auto', '--threads', String(threads), '--print-progress'];
+    const args = ['-m', modelPath, '-f', wavPath, '--output-json-full', '--output-file', outputBase, lf, 'auto', '--threads', String(threads), '--print-progress'];
     console.log(`[WhisperLocal] ${binPath} ${args.join(' ')}`);
 
     const proc = spawn(binPath, args);
@@ -976,6 +1014,21 @@ function register(mainWindow) {
     const tmpDir = path.join(os.tmpdir(), `pinehat-whisper-local-${Date.now()}`);
     fs.mkdirSync(tmpDir, { recursive: true });
 
+    // Auto-detect language flag: try -l first, fallback to --language
+    let langFlag = '-l';
+    async function transcribeWithRetry(wavPath) {
+      try {
+        return await whisperLocalTranscribe(wavPath, binPath, modelPath, modelSize, langFlag);
+      } catch (err) {
+        if (err.message && err.message.includes('unknown argument') && langFlag === '-l') {
+          console.log('[WhisperLocal] Retrying with --language flag');
+          langFlag = '--language';
+          return await whisperLocalTranscribe(wavPath, binPath, modelPath, modelSize, langFlag);
+        }
+        throw err;
+      }
+    }
+
     try {
       if (audioDuration <= 30 * 60) {
         // Short file — single transcription
@@ -983,7 +1036,7 @@ function register(mainWindow) {
         const wavPath = path.join(tmpDir, 'audio.wav');
         await convertToWhisperWav(audioPath, wavPath);
         send({ phase: 'transcribing', percent: 20, detail: `Whisper local (${modelSize}) a transcrever...` });
-        const result = await whisperLocalTranscribe(wavPath, binPath, modelPath, modelSize);
+        const result = await transcribeWithRetry(wavPath);
         send({ phase: 'done', percent: 100 });
         return { success: true, transcription: result };
       }
@@ -997,7 +1050,7 @@ function register(mainWindow) {
       for (let i = 0; i < chunks.length; i++) {
         const pct = Math.round(10 + (i / chunks.length) * 85);
         send({ phase: 'chunk', current: i + 1, total: chunks.length, percent: pct, detail: `A transcrever parte ${i + 1}/${chunks.length} (${modelSize})...` });
-        const result = await whisperLocalTranscribe(chunks[i].path, binPath, modelPath, modelSize);
+        const result = await transcribeWithRetry(chunks[i].path);
         const offset = chunks[i].startSec;
         const words = result.words.map((w) => ({ word: w.word, start: w.start + offset, end: w.end + offset }));
         allWords.push(...words);
