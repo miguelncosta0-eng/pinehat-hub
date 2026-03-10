@@ -456,6 +456,8 @@ Rules:
 function escapeDrawtext(text) {
   // Strip ALL control characters including newlines/tabs (break filter_complex_script)
   let s = text.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/\s+/g, ' ').trim();
+  // Remove trailing dots and make UPPERCASE
+  s = s.replace(/\.+$/, '').trim().toUpperCase();
   // FFmpeg drawtext escaping — order matters!
   s = s.replace(/\\/g, '\\\\');     // \ → \\
   s = s.replace(/'/g, '\u2019');     // ' → \u2019 (typographic apostrophe — can't escape ' inside single-quoted filter values)
@@ -466,16 +468,30 @@ function escapeDrawtext(text) {
   return s;
 }
 
-// Find a font that exists on the system
+// Find a font that exists on the system (cross-platform)
 function getDrawtextFontFile() {
-  const fontsDir = 'C:\\Windows\\Fonts';
-  const candidates = ['arialbd.ttf', 'arial.ttf', 'segoeui.ttf', 'tahomabd.ttf', 'tahoma.ttf'];
-  for (const font of candidates) {
-    if (fs.existsSync(path.join(fontsDir, font))) {
-      return `C\\:/Windows/Fonts/${font}`;
+  if (IS_WIN) {
+    const fontsDir = 'C:\\Windows\\Fonts';
+    const candidates = ['arialbd.ttf', 'arial.ttf', 'segoeui.ttf', 'tahomabd.ttf', 'tahoma.ttf'];
+    for (const font of candidates) {
+      if (fs.existsSync(path.join(fontsDir, font))) {
+        return `C\\:/Windows/Fonts/${font}`;
+      }
     }
+    return 'C\\:/Windows/Fonts/arial.ttf';
   }
-  return 'C\\:/Windows/Fonts/arial.ttf';
+  // macOS
+  const macCandidates = [
+    '/System/Library/Fonts/Helvetica.ttc',
+    '/System/Library/Fonts/SFNSDisplay.ttf',
+    '/Library/Fonts/Arial Bold.ttf',
+    '/Library/Fonts/Arial.ttf',
+    '/System/Library/Fonts/SFNS.ttf',
+  ];
+  for (const p of macCandidates) {
+    if (fs.existsSync(p)) return p.replace(/:/g, '\\:');
+  }
+  return '/System/Library/Fonts/Helvetica.ttc';
 }
 
 // ── Color palettes per channel ──
@@ -491,6 +507,28 @@ function assignOverlayColors(overlays, channel) {
   overlays.forEach((o, i) => {
     if (!o.color) o.color = palette[i % palette.length];
   });
+}
+
+// ── Dark gradient backgrounds for overlays ──
+
+const DARK_BACKGROUNDS = [
+  '000000',   // pure black
+  '0a0a1a',   // dark navy
+  '1a0a0a',   // dark maroon
+  '0a1a0a',   // dark forest
+  '0f0a1e',   // dark purple
+  '1a0f0a',   // dark brown
+  '0a0f1a',   // dark blue
+  '150a1a',   // dark violet
+  '0a1515',   // dark teal
+  '1a1a0a',   // dark olive
+];
+
+let bgCounter = 0;
+function getRandomDarkBg() {
+  const bg = DARK_BACKGROUNDS[bgCounter % DARK_BACKGROUNDS.length];
+  bgCounter++;
+  return bg;
 }
 
 // ── Animation expressions for drawtext ──
@@ -554,8 +592,9 @@ function buildOverlayFilter(overlay, fontFile) {
     alphaExpr = `if(lt(${lt}\\,${entryDur})\\, ${lt}/${entryDur}\\, if(gt(${lt}\\,${exitLocal})\\, 1-(${lt}-${exitLocal})/${entryDur}\\, 1))`;
   }
 
-  // drawbox blacks out the frame, drawtext shows animated text
-  let filter = `drawbox=enable='${en}':color=black:t=fill`;
+  // Dark background + animated text
+  const bg = getRandomDarkBg();
+  let filter = `drawbox=enable='${en}':color=0x${bg}:t=fill`;
   filter += `,drawtext=enable='${en}'`;
   filter += `:fontfile='${fontFile}'`;
   filter += `:text='${escapedText}'`;
@@ -585,8 +624,9 @@ function buildCountingOverlayFilter(overlay, fontFile) {
 
   const en = `between(t\\,${start.toFixed(3)}\\,${end.toFixed(3)})`;
 
-  // drawbox background
-  let filter = `drawbox=enable='${en}':color=black:t=fill`;
+  // Dark gradient background
+  const bg = getRandomDarkBg();
+  let filter = `drawbox=enable='${en}':color=0x${bg}:t=fill`;
 
   // Counting steps — absolute timestamps (6 drawtext entries instead of 31)
   for (let i = 0; i <= steps; i++) {
