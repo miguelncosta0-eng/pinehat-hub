@@ -93,7 +93,14 @@ Hub.renderSettings = async function () {
         <div class="settings-group-title">Canais</div>
         <div class="hint" style="margin-bottom:12px;">Configura os teus canais YouTube. Cada utilizador configura os seus.</div>
         <div id="channelCards">${renderChannelCards()}</div>
-        <button class="btn btn-secondary" id="addChannelBtn" style="margin-top:12px;">+ Adicionar Canal</button>
+        <div style="display:flex;gap:8px;margin-top:12px;align-items:center;">
+          <button class="btn btn-secondary" id="addChannelBtn">+ Adicionar Canal</button>
+          <span style="color:var(--text-dim);font-size:12px;">ou</span>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input class="input" id="joinCodeDirect" placeholder="Código de equipa" style="max-width:160px;font-size:12px;padding:6px 10px;">
+            <button class="btn btn-primary btn-small" id="joinDirectBtn">Juntar</button>
+          </div>
+        </div>
       </div>
 
       <div class="settings-group">
@@ -324,6 +331,29 @@ Hub.renderSettings = async function () {
 
   // Add channel button
   panel.querySelector('#addChannelBtn').addEventListener('click', () => openChannelModal());
+
+  // Join directly with code (no need to create channel first)
+  panel.querySelector('#joinDirectBtn').addEventListener('click', async () => {
+    const input = panel.querySelector('#joinCodeDirect');
+    const code = input?.value?.trim();
+    if (!code) { Hub.showToast('Insere o código de equipa.', 'error'); return; }
+    const btn = panel.querySelector('#joinDirectBtn');
+    btn.disabled = true;
+    btn.textContent = 'A juntar...';
+    const result = await window.api.joinChannelDirect(code);
+    if (result.success) {
+      Hub.showToast(`Ligado ao canal "${result.name}"!`);
+      Hub.state.settings = await window.api.getSettings();
+      Hub.state.channels = Hub.state.settings.channels || {};
+      Hub.state.activeChannel = result.channelId;
+      Hub.renderSidebar();
+      Hub.renderSettings();
+    } else {
+      Hub.showToast(result.error || 'Código inválido', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Juntar';
+    }
+  });
 
   // Edit/Delete channel buttons
   panel.querySelectorAll('.ch-edit-btn').forEach(btn => {

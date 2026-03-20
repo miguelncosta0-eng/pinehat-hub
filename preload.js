@@ -122,6 +122,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Channel Sharing ──
   shareChannel: (channelId) => ipcRenderer.invoke('share-channel', channelId),
   joinChannel: (channelId, code) => ipcRenderer.invoke('join-channel', channelId, code),
+  joinChannelDirect: (code) => ipcRenderer.invoke('join-channel-direct', code),
   unshareChannel: (channelId) => ipcRenderer.invoke('unshare-channel', channelId),
   getShareInfo: (channelId) => ipcRenderer.invoke('get-share-info', channelId),
   onProjectsChanged: (cb) => ipcRenderer.on('projects-changed', (_, d) => cb(d)),

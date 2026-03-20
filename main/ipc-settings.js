@@ -136,6 +136,54 @@ function register() {
     return { success: true };
   });
 
+  // Join directly with code — creates local channel automatically
+  ipcMain.handle('join-channel-direct', async (_event, code) => {
+    const supabase = supabaseHelpers().getSupabase();
+
+    // Find shared channel by code
+    const { data, error } = await supabase
+      .from('shared_channels')
+      .select('id, name')
+      .eq('code', code.trim())
+      .single();
+
+    if (error || !data) return { success: false, error: 'Código não encontrado.' };
+
+    // Generate local channel ID from name
+    const channelId = data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'shared';
+
+    // Create or update local channel
+    const settings = getSettings();
+    if (!settings.channels) settings.channels = {};
+
+    const existing = settings.channels[channelId];
+    if (existing) {
+      // Channel with this ID already exists — link it
+      existing.shared = true;
+      existing.shareCode = code.trim();
+      existing.supabaseChannelId = data.id;
+    } else {
+      // Create new local channel linked to shared one
+      settings.channels[channelId] = {
+        name: data.name,
+        accent: '#8b5cf6',
+        accentHover: '#7748e2',
+        accentGlow: 'rgba(139, 92, 246, 0.10)',
+        shows: '',
+        formats: [],
+        shared: true,
+        shareCode: code.trim(),
+        supabaseChannelId: data.id,
+      };
+    }
+
+    // Switch to this channel
+    settings.activeChannel = channelId;
+    saveSettings(settings);
+
+    return { success: true, name: data.name, channelId };
+  });
+
   ipcMain.handle('get-share-info', (_event, channelId) => {
     const settings = getSettings();
     const ch = settings.channels?.[channelId];
