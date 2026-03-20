@@ -1,7 +1,7 @@
 const { ipcMain, BrowserWindow } = require('electron');
 const path = require('path');
 const { DATA_DIR, readJson, writeJson, uuid, ensureDataDir } = require('./ipc-data');
-const { getSupabase, isChannelShared, getSupabaseChannelId } = require('./supabase');
+const { getSupabase, isChannelShared, getSupabaseChannelId, uploadThumbnail } = require('./supabase');
 const { getSettings } = require('./ipc-settings');
 
 const PROJECTS_PATH = path.join(DATA_DIR, 'projects.json');
@@ -182,6 +182,27 @@ function unsubscribeFromChannel(channelId) {
 }
 
 function register() {
+  // Select image + upload to Supabase Storage, returns public URL
+  ipcMain.handle('select-and-upload-thumbnail', async () => {
+    const { dialog } = require('electron');
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp'] }],
+    });
+
+    const filePath = result.filePaths?.[0];
+    if (!filePath) return { success: false };
+
+    try {
+      const url = await uploadThumbnail(filePath);
+      if (!url) return { success: false, error: 'Upload falhou.' };
+      return { success: true, url, localPath: filePath };
+    } catch (err) {
+      console.error('[Projects] Thumbnail upload error:', err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('get-projects', async (_event, filters) => {
     const channelId = filters?.channel;
 

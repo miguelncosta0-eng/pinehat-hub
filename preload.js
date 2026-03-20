@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   libraryRemoveFile: (opts) => ipcRenderer.invoke('library-remove-file', opts),
   selectFiles: () => ipcRenderer.invoke('select-files'),
   selectImage: () => ipcRenderer.invoke('select-image'),
+  selectAndUploadThumbnail: () => ipcRenderer.invoke('select-and-upload-thumbnail'),
   selectOutputFolder: () => ipcRenderer.invoke('select-output-folder'),
   getMediaInfo: (filePath) => ipcRenderer.invoke('get-media-info', filePath),
   getFileDir: (filePath) => ipcRenderer.invoke('get-file-dir', filePath),

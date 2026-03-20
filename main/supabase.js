@@ -41,4 +41,33 @@ function generateShareCode(channelName) {
   return `${prefix}-${code}`;
 }
 
-module.exports = { getSupabase, isChannelShared, getSupabaseChannelId, generateShareCode };
+// Upload a file to Supabase Storage and return the public URL
+async function uploadThumbnail(filePath) {
+  const fs = require('fs');
+  const path = require('path');
+
+  const ext = path.extname(filePath).toLowerCase();
+  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+  const fileBuffer = fs.readFileSync(filePath);
+
+  const mimeMap = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.bmp': 'image/bmp' };
+  const contentType = mimeMap[ext] || 'image/png';
+
+  const supabase = getSupabase();
+  const { error } = await supabase.storage
+    .from('thumbnails')
+    .upload(fileName, fileBuffer, { contentType, upsert: false });
+
+  if (error) {
+    console.error('[Supabase] Upload error:', error.message);
+    return null;
+  }
+
+  const { data: urlData } = supabase.storage
+    .from('thumbnails')
+    .getPublicUrl(fileName);
+
+  return urlData?.publicUrl || null;
+}
+
+module.exports = { getSupabase, isChannelShared, getSupabaseChannelId, generateShareCode, uploadThumbnail, SUPABASE_URL };

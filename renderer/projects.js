@@ -102,7 +102,7 @@ Hub._renderProjectCard = function (p, scriptMap, compact) {
   if (compact) {
     return `
       <div class="project-card-compact" data-id="${p.id}">
-        ${p.thumbnail ? `<img class="pcc-thumb" src="file://${p.thumbnail.replace(/\\/g, '/')}" alt="">` : `<span class="pc-channel-dot" style="background:${Hub.channelDot(p.channel)}"></span>`}
+        ${p.thumbnail ? `<img class="pcc-thumb" src="${Hub._thumbSrc(p.thumbnail)}" alt="">` : `<span class="pc-channel-dot" style="background:${Hub.channelDot(p.channel)}"></span>`}
         <span class="pcc-title">${Hub._escHtml(p.title)}</span>
         ${Hub.stateBadge(p.state)}
       </div>
@@ -110,7 +110,7 @@ Hub._renderProjectCard = function (p, scriptMap, compact) {
   }
   return `
     <div class="project-card" data-id="${p.id}" draggable="true">
-      ${p.thumbnail ? `<div class="pc-thumbnail"><img src="file://${p.thumbnail.replace(/\\/g, '/')}" alt="" draggable="false"></div>` : ''}
+      ${p.thumbnail ? `<div class="pc-thumbnail"><img src="${Hub._thumbSrc(p.thumbnail)}" alt="" draggable="false"></div>` : ''}
       <div class="pc-title">${Hub._escHtml(p.title)}</div>
       <div class="pc-meta">
         <span class="pc-channel-dot" style="background:${Hub.channelDot(p.channel)}"></span>
@@ -501,7 +501,7 @@ Hub._openProjectDetail = async function (projectId) {
         <label class="form-label">Thumbnail</label>
         <div class="thumbnail-picker" id="epThumbnailPicker">
           <div class="thumbnail-preview" id="epThumbnailPreview">
-            ${project.thumbnail ? `<img src="file://${project.thumbnail.replace(/\\/g, '/')}" alt="Thumbnail">` : '<span class="thumbnail-placeholder">Click to select thumbnail</span>'}
+            ${project.thumbnail ? `<img src="${Hub._thumbSrc(project.thumbnail)}" alt="Thumbnail">` : '<span class="thumbnail-placeholder">Click to select thumbnail</span>'}
           </div>
           <input type="hidden" id="epThumbnail" value="${project.thumbnail || ''}">
           <button class="btn btn-small btn-secondary thumbnail-clear" id="epThumbnailClear" style="${project.thumbnail ? '' : 'display:none'}">✕ Remove</button>
@@ -602,10 +602,19 @@ Hub._initThumbnailPicker = function (modal, prefix) {
   const clearBtn = modal.querySelector(`#${prefix}ThumbnailClear`);
 
   preview.addEventListener('click', async () => {
-    const filePath = await window.api.selectImage();
-    if (!filePath) return;
-    input.value = filePath;
-    preview.innerHTML = `<img src="file://${filePath.replace(/\\/g, '/')}" alt="Thumbnail">`;
+    preview.innerHTML = '<span class="thumbnail-placeholder">A enviar...</span>';
+    const result = await window.api.selectAndUploadThumbnail();
+    if (!result || !result.success) {
+      // Fallback: show current or placeholder
+      const current = input.value;
+      preview.innerHTML = current
+        ? `<img src="${Hub._thumbSrc(current)}" alt="Thumbnail">`
+        : '<span class="thumbnail-placeholder">Click to select thumbnail</span>';
+      if (result?.error) Hub.showToast(result.error, 'error');
+      return;
+    }
+    input.value = result.url;
+    preview.innerHTML = `<img src="${result.url}" alt="Thumbnail">`;
     clearBtn.style.display = '';
   });
 
@@ -615,6 +624,13 @@ Hub._initThumbnailPicker = function (modal, prefix) {
     preview.innerHTML = '<span class="thumbnail-placeholder">Click to select thumbnail</span>';
     clearBtn.style.display = 'none';
   });
+};
+
+// Helper to get thumbnail src — handles both URLs and local file paths
+Hub._thumbSrc = function (thumb) {
+  if (!thumb) return '';
+  if (thumb.startsWith('http://') || thumb.startsWith('https://')) return thumb;
+  return `file://${thumb.replace(/\\/g, '/')}`;
 };
 
 // ── Voiceover picker helper ──
