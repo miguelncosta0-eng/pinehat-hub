@@ -3,8 +3,8 @@ window.Hub = window.Hub || {};
 const PROJECT_STATES = [
   { id: 'ideia', label: 'Ideia', emoji: '💡' },
   { id: 'script', label: 'Script', emoji: '📝' },
-  { id: 'broll', label: 'B-Roll', emoji: '🎬' },
   { id: 'edicao', label: 'Edição', emoji: '✂️' },
+  { id: 'pronto', label: 'Pronto', emoji: '✅' },
   { id: 'publicado', label: 'Publicado', emoji: '🚀' },
 ];
 
@@ -23,9 +23,11 @@ Hub.renderProjects = async function () {
   const scriptMap = {};
   allScripts.forEach((s) => { scriptMap[s.id] = s; });
 
+  const isShared = !!(Hub.state.channels[ch]?.shared);
+
   panel.innerHTML = `
     <div class="section-header">
-      <h2>Projetos</h2>
+      <h2>Projetos${isShared ? ' <span class="shared-badge-header">Partilhado</span>' : ''}</h2>
       <div class="view-toggle">
         <button class="view-toggle-btn ${view === 'kanban' ? 'active' : ''}" data-view="kanban">
           ${Hub.icons.kanban} Kanban
@@ -80,9 +82,15 @@ Hub._renderKanbanView = function (container, projects, scriptMap) {
     </div>
   `;
 
-  // Click to open detail
+  // Click to open detail (but not after a drag)
+  let wasDragging = false;
   container.querySelectorAll('.project-card').forEach((card) => {
-    card.addEventListener('click', () => Hub._openProjectDetail(card.dataset.id));
+    card.addEventListener('mousedown', () => { wasDragging = false; });
+    card.addEventListener('mousemove', () => { wasDragging = true; });
+    card.addEventListener('click', (e) => {
+      if (wasDragging) { e.stopPropagation(); return; }
+      Hub._openProjectDetail(card.dataset.id);
+    });
   });
 
   // Drag & Drop
@@ -94,7 +102,7 @@ Hub._renderProjectCard = function (p, scriptMap, compact) {
   if (compact) {
     return `
       <div class="project-card-compact" data-id="${p.id}">
-        <span class="pc-channel-dot" style="background:${Hub.channelDot(p.channel)}"></span>
+        ${p.thumbnail ? `<img class="pcc-thumb" src="file://${p.thumbnail.replace(/\\/g, '/')}" alt="">` : `<span class="pc-channel-dot" style="background:${Hub.channelDot(p.channel)}"></span>`}
         <span class="pcc-title">${Hub._escHtml(p.title)}</span>
         ${Hub.stateBadge(p.state)}
       </div>
@@ -102,12 +110,14 @@ Hub._renderProjectCard = function (p, scriptMap, compact) {
   }
   return `
     <div class="project-card" data-id="${p.id}" draggable="true">
+      ${p.thumbnail ? `<div class="pc-thumbnail"><img src="file://${p.thumbnail.replace(/\\/g, '/')}" alt="" draggable="false"></div>` : ''}
       <div class="pc-title">${Hub._escHtml(p.title)}</div>
       <div class="pc-meta">
         <span class="pc-channel-dot" style="background:${Hub.channelDot(p.channel)}"></span>
         ${p.format ? `<span class="pc-format">${Hub._projectFormatLabel(p.channel, p.format)}</span>` : ''}
       </div>
       ${p.scriptId && scriptMap[p.scriptId] ? `<div class="pc-script-badge">📝 ${Hub._escHtml(scriptMap[p.scriptId].title)}</div>` : ''}
+      ${p.voiceover ? `<div class="pc-vo-badge">🎙️ ${p.voiceover.split(/[\\/]/).pop()}</div>` : ''}
       ${p.publishDate ? `<div class="pc-date-badge">📅 ${Hub.fmtDate(p.publishDate)}</div>` : ''}
       ${p.notes ? `<div class="pc-notes">${Hub._escHtml(p.notes)}</div>` : ''}
     </div>
@@ -231,46 +241,67 @@ Hub._projectFormatLabel = function (channelId, formatId) {
 };
 
 // ── Kanban Drag & Drop ──
+// Uses invisible drop-zone overlays that appear on top of columns during drag.
+// This avoids all issues with pointer-events, overflow, and nested elements.
 Hub._initKanbanDragDrop = function (panel) {
   let draggedId = null;
+  const columns = panel.querySelectorAll('.kanban-column');
 
-  // Drag start on cards
+  // Create invisible drop overlays on top of each column
+  columns.forEach((col) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'kanban-drop-overlay';
+    overlay.dataset.state = col.dataset.state;
+    overlay.style.cssText = 'display:none;position:absolute;top:0;left:0;width:100%;height:100%;z-index:100;';
+    col.style.position = 'relative';
+    col.appendChild(overlay);
+
+    overlay.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      col.classList.add('drag-over');
+    });
+    overlay.addEventListener('dragleave', () => {
+      col.classList.remove('drag-over');
+    });
+    overlay.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      col.classList.remove('drag-over');
+      const projectId = e.dataTransfer.getData('text/plain') || draggedId;
+      if (!projectId) return;
+      await window.api.updateProject(projectId, { state: col.dataset.state });
+      Hub.renderProjects();
+    });
+  });
+
+  function showOverlays() {
+    columns.forEach((col) => {
+      const ov = col.querySelector('.kanban-drop-overlay');
+      if (ov) ov.style.display = 'block';
+    });
+  }
+  function hideOverlays() {
+    columns.forEach((col) => {
+      const ov = col.querySelector('.kanban-drop-overlay');
+      if (ov) ov.style.display = 'none';
+      col.classList.remove('drag-over');
+    });
+  }
+
   panel.querySelectorAll('.project-card').forEach((card) => {
     card.addEventListener('dragstart', (e) => {
       draggedId = card.dataset.id;
-      card.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', card.dataset.id);
+      requestAnimationFrame(() => {
+        card.classList.add('dragging');
+        showOverlays();
+      });
     });
     card.addEventListener('dragend', () => {
       card.classList.remove('dragging');
       draggedId = null;
-      // Remove all drop highlights
-      panel.querySelectorAll('.kanban-column-body').forEach((col) => col.classList.remove('drag-over'));
-    });
-  });
-
-  // Drop targets on column bodies
-  panel.querySelectorAll('.kanban-column-body').forEach((colBody) => {
-    colBody.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      colBody.classList.add('drag-over');
-    });
-    colBody.addEventListener('dragleave', (e) => {
-      if (!colBody.contains(e.relatedTarget)) {
-        colBody.classList.remove('drag-over');
-      }
-    });
-    colBody.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      colBody.classList.remove('drag-over');
-      const projectId = e.dataTransfer.getData('text/plain') || draggedId;
-      if (!projectId) return;
-
-      const newState = colBody.dataset.state;
-      await window.api.updateProject(projectId, { state: newState });
-      Hub.renderProjects();
+      hideOverlays();
     });
   });
 };
@@ -280,7 +311,7 @@ Hub.openNewProjectModal = async function (defaultDate) {
   const ch = Hub.state.activeChannel;
   const channels = Hub.state.channels;
   const formats = channels[ch]?.formats || [];
-  const allScripts = await window.api.getScripts({});
+  const allScripts = await window.api.getScripts({ channel: ch });
 
   const backdrop = document.getElementById('modalBackdrop');
   const modal = document.getElementById('modalContent');
@@ -321,6 +352,16 @@ Hub.openNewProjectModal = async function (defaultDate) {
         <input class="input" type="date" id="npPublishDate" value="${defaultDate || ''}">
       </div>
       <div class="form-group">
+        <label class="form-label">Thumbnail</label>
+        <div class="thumbnail-picker" id="npThumbnailPicker">
+          <div class="thumbnail-preview" id="npThumbnailPreview">
+            <span class="thumbnail-placeholder">Click to select thumbnail</span>
+          </div>
+          <input type="hidden" id="npThumbnail" value="">
+          <button class="btn btn-small btn-secondary thumbnail-clear" id="npThumbnailClear" style="display:none">✕ Remove</button>
+        </div>
+      </div>
+      <div class="form-group">
         <label class="form-label">Notas</label>
         <textarea class="textarea" id="npNotes" rows="3" placeholder="Notas opcionais..."></textarea>
       </div>
@@ -335,11 +376,18 @@ Hub.openNewProjectModal = async function (defaultDate) {
 
   const channelSelect = modal.querySelector('#npChannel');
   const formatSelect = modal.querySelector('#npFormat');
-  channelSelect.addEventListener('change', () => {
-    const chFormats = channels[channelSelect.value]?.formats || [];
+  const scriptSelect = modal.querySelector('#npScript');
+  channelSelect.addEventListener('change', async () => {
+    const newCh = channelSelect.value;
+    const chFormats = channels[newCh]?.formats || [];
     formatSelect.innerHTML = `<option value="">Nenhum</option>` +
       chFormats.map((f) => `<option value="${f.id}">${f.name}</option>`).join('');
+    const chScripts = await window.api.getScripts({ channel: newCh });
+    scriptSelect.innerHTML = `<option value="">Nenhum</option>` +
+      chScripts.map((s) => `<option value="${s.id}">${Hub._escHtml(s.title)}</option>`).join('');
   });
+
+  Hub._initThumbnailPicker(modal, 'np');
 
   modal.querySelector('#npCancel').addEventListener('click', () => backdrop.classList.remove('visible'));
 
@@ -353,6 +401,7 @@ Hub.openNewProjectModal = async function (defaultDate) {
       scriptId: modal.querySelector('#npScript').value || null,
       publishDate: modal.querySelector('#npPublishDate').value || null,
       notes: modal.querySelector('#npNotes').value,
+      thumbnail: modal.querySelector('#npThumbnail').value || null,
     });
     backdrop.classList.remove('visible');
     Hub.showToast('Projeto criado!');
@@ -362,12 +411,11 @@ Hub.openNewProjectModal = async function (defaultDate) {
 
 // ── Project detail modal ──
 Hub._openProjectDetail = async function (projectId) {
-  const [projects, allScripts] = await Promise.all([
-    window.api.getProjects({}),
-    window.api.getScripts({}),
-  ]);
+  const projects = await window.api.getProjects({});
   const project = projects.find((p) => p.id === projectId);
   if (!project) return;
+
+  const allScripts = await window.api.getScripts({ channel: project.channel });
 
   const channels = Hub.state.channels;
   const chFormats = channels[project.channel]?.formats || [];
@@ -432,8 +480,44 @@ Hub._openProjectDetail = async function (projectId) {
       </div>
 
       <div class="form-group">
+        <label class="form-label">Voiceover</label>
+        <div class="vo-file-picker">
+          <div class="vo-file-display" id="epVoiceoverDisplay">
+            ${project.voiceover ? `
+              <span class="vo-file-icon">🎙️</span>
+              <span class="vo-file-path">${project.voiceover.split(/[\\/]/).pop()}</span>
+              <button class="btn-icon vo-file-remove" id="epVoiceoverRemove" title="Remove">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            ` : `
+              <button class="btn btn-small btn-secondary" id="epVoiceoverSelect">🎙️ Select voiceover file</button>
+            `}
+          </div>
+          <input type="hidden" id="epVoiceover" value="${project.voiceover || ''}">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Thumbnail</label>
+        <div class="thumbnail-picker" id="epThumbnailPicker">
+          <div class="thumbnail-preview" id="epThumbnailPreview">
+            ${project.thumbnail ? `<img src="file://${project.thumbnail.replace(/\\/g, '/')}" alt="Thumbnail">` : '<span class="thumbnail-placeholder">Click to select thumbnail</span>'}
+          </div>
+          <input type="hidden" id="epThumbnail" value="${project.thumbnail || ''}">
+          <button class="btn btn-small btn-secondary thumbnail-clear" id="epThumbnailClear" style="${project.thumbnail ? '' : 'display:none'}">✕ Remove</button>
+        </div>
+      </div>
+
+      <div class="form-group">
         <label class="form-label">Notas</label>
         <textarea class="textarea" id="epNotes" rows="3">${project.notes || ''}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Upload Checklist</label>
+        <div class="upload-checklist" id="epChecklist">
+          ${Hub._renderChecklist(project.checklist)}
+        </div>
       </div>
 
       <div class="pd-dates">
@@ -462,14 +546,23 @@ Hub._openProjectDetail = async function (projectId) {
     });
   });
 
-  // Update formats when channel changes
+  // Update formats and scripts when channel changes
   const channelSelect = modal.querySelector('#epChannel');
   const formatSelect = modal.querySelector('#epFormat');
-  channelSelect.addEventListener('change', () => {
-    const newFormats = channels[channelSelect.value]?.formats || [];
+  const scriptSelect = modal.querySelector('#epScript');
+  channelSelect.addEventListener('change', async () => {
+    const ch = channelSelect.value;
+    const newFormats = channels[ch]?.formats || [];
     formatSelect.innerHTML = `<option value="">Nenhum</option>` +
       newFormats.map((f) => `<option value="${f.id}">${f.name}</option>`).join('');
+    const chScripts = await window.api.getScripts({ channel: ch });
+    scriptSelect.innerHTML = `<option value="">Nenhum</option>` +
+      chScripts.map((s) => `<option value="${s.id}">${Hub._escHtml(s.title)}</option>`).join('');
   });
+
+  Hub._initThumbnailPicker(modal, 'ep');
+  Hub._initVoiceoverPicker(modal);
+  Hub._initChecklist(modal);
 
   modal.querySelector('#epCancel').addEventListener('click', () => backdrop.classList.remove('visible'));
 
@@ -483,6 +576,9 @@ Hub._openProjectDetail = async function (projectId) {
       publishDate: modal.querySelector('#epPublishDate').value || null,
       youtubeUrl: modal.querySelector('#epYoutube').value || null,
       notes: modal.querySelector('#epNotes').value,
+      thumbnail: modal.querySelector('#epThumbnail').value || null,
+      voiceover: modal.querySelector('#epVoiceover').value || null,
+      checklist: Hub._getChecklistState(modal),
     });
     backdrop.classList.remove('visible');
     Hub.showToast('Projeto atualizado!');
@@ -498,3 +594,116 @@ Hub._openProjectDetail = async function (projectId) {
     });
   });
 };
+
+// ── Thumbnail picker helper ──
+Hub._initThumbnailPicker = function (modal, prefix) {
+  const preview = modal.querySelector(`#${prefix}ThumbnailPreview`);
+  const input = modal.querySelector(`#${prefix}Thumbnail`);
+  const clearBtn = modal.querySelector(`#${prefix}ThumbnailClear`);
+
+  preview.addEventListener('click', async () => {
+    const filePath = await window.api.selectImage();
+    if (!filePath) return;
+    input.value = filePath;
+    preview.innerHTML = `<img src="file://${filePath.replace(/\\/g, '/')}" alt="Thumbnail">`;
+    clearBtn.style.display = '';
+  });
+
+  clearBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    input.value = '';
+    preview.innerHTML = '<span class="thumbnail-placeholder">Click to select thumbnail</span>';
+    clearBtn.style.display = 'none';
+  });
+};
+
+// ── Voiceover picker helper ──
+Hub._initVoiceoverPicker = function (modal) {
+  const display = modal.querySelector('#epVoiceoverDisplay');
+  const input = modal.querySelector('#epVoiceover');
+  if (!display || !input) return;
+
+  const selectBtn = modal.querySelector('#epVoiceoverSelect');
+  if (selectBtn) {
+    selectBtn.addEventListener('click', async () => {
+      const files = await window.api.selectFiles();
+      if (!files || !files[0]) return;
+      const filePath = files[0];
+      const ext = filePath.split('.').pop().toLowerCase();
+      const audioExts = ['mp3', 'wav', 'm4a', 'ogg', 'aac', 'flac', 'wma'];
+      if (!audioExts.includes(ext)) {
+        Hub.showToast('Select an audio file', 'error');
+        return;
+      }
+      input.value = filePath;
+      display.innerHTML = `
+        <span class="vo-file-icon">🎙️</span>
+        <span class="vo-file-path">${filePath.split(/[\\/]/).pop()}</span>
+        <button class="btn-icon vo-file-remove" id="epVoiceoverRemove" title="Remove">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      `;
+      Hub._initVoiceoverPicker(modal); // re-bind remove btn
+    });
+  }
+
+  const removeBtn = modal.querySelector('#epVoiceoverRemove');
+  if (removeBtn) {
+    removeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      input.value = '';
+      display.innerHTML = `<button class="btn btn-small btn-secondary" id="epVoiceoverSelect">🎙️ Select voiceover file</button>`;
+      Hub._initVoiceoverPicker(modal); // re-bind select btn
+    });
+  }
+};
+
+// ── Upload Checklist ──
+const CHECKLIST_ITEMS = [
+  { id: 'script', label: 'Script done' },
+  { id: 'voiceover', label: 'Voiceover recorded' },
+  { id: 'editing', label: 'Video edited' },
+  { id: 'thumbnail', label: 'Thumbnail created' },
+  { id: 'title', label: 'Title optimized' },
+  { id: 'description', label: 'Description written' },
+  { id: 'tags', label: 'Tags added' },
+  { id: 'endscreen', label: 'End screen / Cards' },
+  { id: 'review', label: 'Final review' },
+];
+
+Hub._renderChecklist = function (checklist) {
+  const state = checklist || {};
+  return CHECKLIST_ITEMS.map((item) => `
+    <label class="checklist-item ${state[item.id] ? 'checked' : ''}">
+      <input type="checkbox" data-check="${item.id}" ${state[item.id] ? 'checked' : ''}>
+      <span class="checklist-label">${item.label}</span>
+    </label>
+  `).join('');
+};
+
+Hub._getChecklistState = function (modal) {
+  const state = {};
+  modal.querySelectorAll('#epChecklist input[type="checkbox"]').forEach((cb) => {
+    state[cb.dataset.check] = cb.checked;
+  });
+  return state;
+};
+
+Hub._initChecklist = function (modal) {
+  modal.querySelectorAll('#epChecklist .checklist-item').forEach((item) => {
+    const cb = item.querySelector('input');
+    cb.addEventListener('change', () => {
+      item.classList.toggle('checked', cb.checked);
+    });
+  });
+};
+
+// ── Real-time refresh listener ──
+if (!Hub._projectsRealtimeBound) {
+  Hub._projectsRealtimeBound = true;
+  window.api.onProjectsChanged(() => {
+    if (Hub.state.activeSection === 'projects') {
+      Hub.renderProjects();
+    }
+  });
+}

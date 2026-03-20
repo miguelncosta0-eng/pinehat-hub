@@ -21,12 +21,13 @@
   gap: 14px;
   padding: 12px 16px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: none;
+  border-radius: 6px;
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition: box-shadow 0.2s, background 0.15s;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
-.script-card:hover { border-color: var(--border-light); }
+.script-card:hover { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.15); }
 
 .script-card .sc-icon {
   width: 36px; height: 36px; border-radius: var(--radius-sm);
@@ -40,6 +41,9 @@
 .script-card .sc-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; display: flex; gap: 8px; align-items: center; }
 
 .script-card .sc-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.script-card .sc-actions .delete-script-btn { color: var(--text-dim); padding: 6px; border-radius: 4px; }
+.script-card .sc-actions .delete-script-btn svg { width: 16px; height: 16px; }
+.script-card .sc-actions .delete-script-btn:hover { color: #ef4444; background: rgba(239, 68, 68, 0.1); }
 
 /* Script editor view */
 .script-editor {
@@ -58,14 +62,20 @@
   border-bottom: 1px solid var(--border);
 }
 .script-editor-header .back-btn { flex-shrink: 0; }
-.script-editor-header .se-title {
+.script-editor-header .se-title-input {
   flex: 1;
   font-size: 16px;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 4px 8px;
+  font-family: var(--font-sans);
+  min-width: 0;
 }
+.script-editor-header .se-title-input:hover { border-color: var(--border); }
+.script-editor-header .se-title-input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
 .script-editor-header .se-status { display: flex; align-items: center; gap: 8px; }
 
 .script-editor-body {

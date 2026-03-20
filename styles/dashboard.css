@@ -1,64 +1,63 @@
 /* ── Dashboard ── */
-.dashboard-content { padding: 0 24px 24px; overflow-y: auto; flex: 1; }
+.dashboard-content { padding: 0 28px 28px; overflow-y: auto; flex: 1; }
 
 .dashboard-greeting {
-  font-size: 22px;
-  font-weight: 600;
+  font-size: 24px;
+  font-weight: 700;
   margin-bottom: 24px;
-  letter-spacing: -0.3px;
+  letter-spacing: -0.5px;
 }
 .dashboard-greeting span { color: var(--accent); }
 
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  gap: 16px;
   margin-bottom: 28px;
 }
 
 .stat-card {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 16px;
+  border: none;
+  border-radius: 6px;
+  padding: 20px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+  transition: box-shadow 0.2s;
 }
+.stat-card:hover { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.15); }
 .stat-card .stat-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-dim);
-  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-mid);
+  font-weight: 400;
   margin-bottom: 6px;
 }
 .stat-card .stat-value {
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 700;
   color: var(--text);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 .dashboard-section-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
-  color: var(--text-mid);
+  color: var(--text-dim);
   margin-bottom: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
-.recent-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 28px; }
+.recent-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 28px; }
 .recent-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition: background 0.15s;
 }
-.recent-item:hover { border-color: var(--border-light); }
+.recent-item:hover { background: rgba(255, 255, 255, 0.03); }
 .recent-item .ri-title { flex: 1; font-size: 13px; font-weight: 500; }
 .recent-item .ri-meta { font-size: 11px; color: var(--text-dim); }
 

@@ -60,10 +60,18 @@ Hub.renderScripts = async function () {
 
   panel.querySelectorAll('.delete-script-btn').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
+      e.preventDefault();
       e.stopPropagation();
-      await window.api.deleteScript(btn.dataset.id);
-      Hub.showToast('Script apagado');
-      Hub.renderScripts();
+      const id = btn.dataset.id || btn.closest('[data-id]')?.dataset.id;
+      if (!id) return;
+      if (!confirm('Apagar este script?')) return;
+      try {
+        await window.api.deleteScript(id);
+        Hub.showToast('Script apagado');
+        Hub.renderScripts();
+      } catch (err) {
+        Hub.showToast('Erro ao apagar script', 'error');
+      }
     });
   });
 };
@@ -92,7 +100,7 @@ Hub._renderScriptEditor = async function (panel, scriptId) {
     <div class="script-editor visible">
       <div class="script-editor-header">
         <button class="btn btn-ghost btn-small back-btn" id="scriptBackBtn">${Hub.icons.back} Voltar</button>
-        <div class="se-title">${script.title}</div>
+        <input class="se-title-input" id="scriptTitleInput" value="${script.title.replace(/"/g, '&quot;')}" spellcheck="false" />
         <div class="se-meta-info">
           ${script.format ? `<span class="sc-format">${Hub._formatLabel(script.channel, script.format)}</span>` : ''}
           ${script.generationMeta ? `<span class="se-gen-info">${script.generationMeta.model} · ${script.generationMeta.callCount} chamada${script.generationMeta.callCount !== 1 ? 's' : ''}</span>` : ''}
@@ -129,15 +137,19 @@ Hub._renderScriptEditor = async function (panel, scriptId) {
 
   panel.querySelector('#scriptSaveBtn').addEventListener('click', async () => {
     const state = panel.querySelector('#scriptStateSelect').value;
-    await window.api.updateScript(scriptId, { content: textarea.value, state });
+    const title = panel.querySelector('#scriptTitleInput').value.trim() || 'Sem título';
+    await window.api.updateScript(scriptId, { content: textarea.value, state, title });
     Hub.showToast('Script guardado!');
   });
 };
 
-// ── New script modal (simplified — just title) ──
+// ── New script modal (simplified — just title + format) ──
 Hub.openNewScriptModal = function () {
   const ch = Hub.state.activeChannel;
   const chName = Hub.channelName(ch);
+  const chConfig = Hub.state.channels[ch] || {};
+  const formats = chConfig.formats || [];
+  const defaultFmt = formats[0] || { id: 'default', name: 'Default', targetWords: 5000, chapters: 4 };
 
   const backdrop = document.getElementById('modalBackdrop');
   const modal = document.getElementById('modalContent');
@@ -148,23 +160,39 @@ Hub.openNewScriptModal = function () {
       <div class="form-group">
         <label class="form-label">Título do vídeo</label>
         <input class="input" id="nsTitle" placeholder="ex: Fall Asleep to Gravity Falls Mysteries Explained" autofocus>
-        <div class="form-hint">Formato: Fall Asleep To · ~20k palavras · 14 capítulos</div>
       </div>
+      ${formats.length > 1 ? `
+      <div class="form-group">
+        <label class="form-label">Formato</label>
+        <select class="input" id="nsFormat">
+          ${formats.map(f => `<option value="${f.id}" data-words="${f.targetWords}" data-chapters="${f.chapters}">${f.name} · ~${Hub._fmtWords(f.targetWords)} · ${f.chapters} cap.</option>`).join('')}
+        </select>
+      </div>` : `<input type="hidden" id="nsFormat" value="${defaultFmt.id}">`}
+      <div class="form-hint" id="nsFormatHint">Formato: ${defaultFmt.name} · ~${Hub._fmtWords(defaultFmt.targetWords)} · ${defaultFmt.chapters} capítulos</div>
 
       <div class="modal-actions">
         <button class="btn btn-secondary" id="nsCancel">Cancelar</button>
-        <button class="btn btn-secondary" id="nsWrite">✏️ Escrever</button>
+        <button class="btn btn-secondary" id="nsWrite">Escrever</button>
         <button class="btn btn-primary" id="nsGenerate">${Hub.icons.play} Gerar Script</button>
       </div>
     </div>
   `;
 
   backdrop.classList.add('visible');
-
-  // Focus title input
   setTimeout(() => modal.querySelector('#nsTitle')?.focus(), 100);
 
-  // Allow Enter to generate
+  // Update hint on format change
+  const fmtSelect = modal.querySelector('#nsFormat');
+  if (fmtSelect && fmtSelect.tagName === 'SELECT') {
+    fmtSelect.addEventListener('change', () => {
+      const opt = fmtSelect.selectedOptions[0];
+      const hint = modal.querySelector('#nsFormatHint');
+      if (hint && opt) {
+        hint.textContent = `Formato: ${opt.textContent}`;
+      }
+    });
+  }
+
   modal.querySelector('#nsTitle').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') modal.querySelector('#nsGenerate').click();
   });
@@ -191,15 +219,16 @@ Hub.openNewScriptModal = function () {
       return;
     }
 
-    // Get per-channel prompt from settings
-    const channelPrompt = settings.channelPrompts?.[ch] || '';
+    const selectedFormat = modal.querySelector('#nsFormat').value || defaultFmt.id;
+    const fmt = formats.find(f => f.id === selectedFormat) || defaultFmt;
+    const channelPrompt = chConfig.prompt || settings.channelPrompts?.[ch] || '';
 
     backdrop.classList.remove('visible');
     Hub._startScriptGeneration({
       title,
       channel: ch,
-      format: 'fall-asleep-to',
-      targetWords: 20000,
+      format: selectedFormat,
+      targetWords: fmt.targetWords,
       tone: 'default',
       extraNotes: channelPrompt,
     });

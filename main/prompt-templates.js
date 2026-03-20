@@ -1,41 +1,8 @@
-const CHANNELS = {
-  pinehat: {
-    name: 'Pine Hat',
-    accent: '#8b5cf6',
-    accentHover: '#7c3aed',
-    accentGlow: 'rgba(139, 92, 246, 0.10)',
-    shows: 'Gravity Falls',
-    formats: [
-      { id: 'fall-asleep-to', name: 'Fall Asleep To', targetWords: 20000, chapters: 14 },
-      { id: 'deep-analysis', name: 'Deep Analysis', targetWords: 10000, chapters: 7 },
-      { id: 'lore-breakdown', name: 'Lore Breakdown', targetWords: 5000, chapters: 4 },
-    ],
-  },
-  papertown: {
-    name: 'Paper Town',
-    accent: '#f59e0b',
-    accentHover: '#d97706',
-    accentGlow: 'rgba(245, 158, 11, 0.10)',
-    shows: 'South Park',
-    formats: [
-      { id: 'fall-asleep-to', name: 'Fall Asleep To', targetWords: 20000, chapters: 14 },
-      { id: 'character-analysis', name: 'Character Analysis', targetWords: 10000, chapters: 7 },
-      { id: 'episode-breakdown', name: 'Episode Breakdown', targetWords: 5000, chapters: 4 },
-    ],
-  },
-  cortoon: {
-    name: 'Cortoon',
-    accent: '#22c55e',
-    accentHover: '#16a34a',
-    accentGlow: 'rgba(34, 197, 94, 0.10)',
-    shows: 'Gumball, Multi-Cartoon',
-    formats: [
-      { id: 'fall-asleep-to', name: 'Fall Asleep To', targetWords: 20000, chapters: 14 },
-      { id: 'lore-theories', name: 'Lore & Theories', targetWords: 10000, chapters: 7 },
-      { id: 'youtube-short', name: 'YouTube Short', targetWords: 200, chapters: 1 },
-    ],
-  },
-};
+// Channels are now stored in settings.json — loaded dynamically
+function getChannels() {
+  const { getChannels: gc } = require('./ipc-settings');
+  return gc();
+}
 
 // ── Tone presets ──
 
@@ -88,7 +55,8 @@ const TONE_PRESETS = {
 // ── Prompt builders ──
 
 function getChannelIdentity(channelId) {
-  const ch = CHANNELS[channelId];
+  const ch = getChannels()[channelId];
+  if (!ch) return `You are a professional scriptwriter. You write in English.`;
   return `You are a professional scriptwriter for the YouTube channel "${ch.name}". The channel focuses on ${ch.shows} content. You write in English.`;
 }
 
@@ -122,7 +90,8 @@ function getToneGuide(channelId, formatId, toneOverride) {
 }
 
 function getFormatInstructions(channelId, formatId, customTargetWords) {
-  const ch = CHANNELS[channelId];
+  const ch = getChannels()[channelId];
+  if (!ch) return '';
   const fmt = ch.formats.find((f) => f.id === formatId);
   if (!fmt) return '';
 
@@ -183,8 +152,9 @@ function buildPrompt(channelId, formatId, options) {
 }
 
 function getSystemPrompt(channelId) {
-  const ch = CHANNELS[channelId];
+  const ch = getChannels()[channelId];
+  if (!ch) return `You are a professional YouTube scriptwriter. You write scripts in English that are engaging, well-researched, and perfectly suited for narration. You always write in plain prose — never JSON, never code blocks, never structured data formats.`;
   return `You are a professional YouTube scriptwriter for "${ch.name}", a channel about ${ch.shows}. You write scripts in English that are engaging, well-researched, and perfectly suited for narration. You always write in plain prose — never JSON, never code blocks, never structured data formats.`;
 }
 
-module.exports = { CHANNELS, buildPrompt, getSystemPrompt };
+module.exports = { getChannels, buildPrompt, getSystemPrompt };

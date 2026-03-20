@@ -55,8 +55,8 @@ Hub.channelDot = function (channelId) {
 };
 
 Hub.channelName = function (channelId) {
-  const names = { pinehat: 'Pine Hat', papertown: 'Paper Town', cortoon: 'Cortoon' };
-  return names[channelId] || channelId;
+  const ch = (Hub.state.channels || {})[channelId];
+  return ch ? ch.name : channelId;
 };
 
 Hub.stateBadge = function (state) {

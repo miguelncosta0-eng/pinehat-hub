@@ -26,12 +26,10 @@
   flex-shrink: 0;
 }
 .broll-output-row label {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
   white-space: nowrap;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  font-weight: 600;
+  font-weight: 500;
 }
 .broll-path-display {
   flex: 1;
@@ -59,8 +57,8 @@
 .broll-drop-zone {
   margin: 16px;
   padding: 40px 24px;
-  border: 2px dashed var(--text-dim);
-  border-radius: var(--radius-lg);
+  border: 2px dashed rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
   text-align: center;
   cursor: pointer;
   transition: all 0.2s;
@@ -102,8 +100,9 @@
 
 .broll-file-card {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 10px; background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); margin-bottom: 4px;
+  padding: 8px 10px; background: var(--surface); border: none;
+  border-radius: 4px; margin-bottom: 4px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 .broll-file-icon {
   width: 28px; height: 28px; border-radius: 6px; background: var(--accent-glow);

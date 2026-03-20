@@ -250,7 +250,7 @@ Hub._renderCompetitorDetail = async function (panel, competitorId) {
           </div>
 
           <div class="chart-section">
-            <h4>Views Totais</h4>
+            <h4>Views Diárias</h4>
             <div class="chart-container" id="chartViewsContainer">
               <canvas id="chartViews"></canvas>
             </div>
@@ -318,7 +318,16 @@ Hub._renderCompetitorDetail = async function (panel, competitorId) {
 
     const drawCharts = () => {
       const subsData = history.map((h) => ({ date: h.date, value: h.subscriberCount }));
-      const viewsData = history.map((h) => ({ date: h.date, value: h.viewCount }));
+      // Daily views (delta between consecutive snapshots, skip duplicates)
+      const viewsData = [];
+      for (let i = 1; i < history.length; i++) {
+        const delta = history[i].viewCount - history[i - 1].viewCount;
+        if (delta <= 0) continue;            // skip duplicate / stale snapshots
+        viewsData.push({
+          date: history[i].date,
+          value: delta,
+        });
+      }
 
       Hub.drawLineChart(panel.querySelector('#chartSubs'), [
         { label: 'Subscritores', data: subsData, color: accent },

@@ -2,16 +2,27 @@ window.Hub = window.Hub || {};
 
 // ── Init app ──
 Hub.init = async function () {
-  // Load channels config
-  Hub.state.channels = await window.api.getChannelsConfig();
-
-  // Load settings
+  // Load settings first (channels are now inside settings)
   Hub.state.settings = await window.api.getSettings();
-  Hub.state.activeChannel = Hub.state.settings.activeChannel || 'pinehat';
-  Hub.state.activeSection = Hub.state.settings.lastSection || 'dashboard';
+  Hub.state.channels = Hub.state.settings.channels || {};
+
+  const channelIds = Object.keys(Hub.state.channels);
+
+  if (channelIds.length === 0) {
+    // No channels configured — show settings for first-time setup
+    Hub.state.activeChannel = '';
+    Hub.state.activeSection = 'settings';
+  } else {
+    // Use saved active channel, or fallback to first available
+    const saved = Hub.state.settings.activeChannel;
+    Hub.state.activeChannel = (saved && Hub.state.channels[saved]) ? saved : channelIds[0];
+    Hub.state.activeSection = Hub.state.settings.lastSection || 'dashboard';
+  }
 
   // Apply channel theme
-  Hub.setChannel(Hub.state.activeChannel, true);
+  if (Hub.state.activeChannel) {
+    Hub.setChannel(Hub.state.activeChannel, true);
+  }
 
   // Render sidebar
   Hub.renderSidebar();
@@ -72,9 +83,14 @@ Hub.renderCurrentSection = function () {
   else if (section === 'scripts' && Hub.renderScripts) Hub.renderScripts();
   else if (section === 'broll' && Hub.renderBroll) Hub.renderBroll();
   else if (section === 'editor' && Hub.renderEditor) Hub.renderEditor();
+  else if (section === 'voiceover' && Hub.renderVoiceover) Hub.renderVoiceover();
   else if (section === 'projects' && Hub.renderProjects) Hub.renderProjects();
   else if (section === 'competitors' && Hub.renderCompetitors) Hub.renderCompetitors();
   else if (section === 'series' && Hub.renderSeries) Hub.renderSeries();
+  else if (section === 'ideation' && Hub.renderIdeation) Hub.renderIdeation();
+
+  else if (section === 'seo' && Hub.renderSeo) Hub.renderSeo();
+  else if (section === 'chat-projects' && Hub.renderChatProjects) Hub.renderChatProjects();
   else if (section === 'settings' && Hub.renderSettings) Hub.renderSettings();
 };
 
@@ -86,10 +102,13 @@ Hub.renderSidebar = function () {
     { id: 'dashboard', label: 'Dashboard', icon: Hub.icons.dashboard },
     { id: 'scripts', label: 'Scripts', icon: Hub.icons.scripts },
     { id: 'broll', label: 'B-Roll', icon: Hub.icons.broll },
-    { id: 'editor', label: 'Editor', icon: Hub.icons.editor },
+    { id: 'voiceover', label: 'Voiceover', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>' },
     { id: 'projects', label: 'Projetos', icon: Hub.icons.projects },
     { id: 'competitors', label: 'Competidores', icon: Hub.icons.competitors },
     { id: 'series', label: 'Séries', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' },
+    { id: 'ideation', label: 'Ideation', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>' },
+    { id: 'seo', label: 'SEO Generator', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/></svg>' },
+    { id: 'chat-projects', label: 'Claude Projects', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>' },
   ];
 
   nav.innerHTML = sections.map((s) => `
@@ -108,27 +127,31 @@ Hub.renderSidebar = function () {
     settingsBtn.addEventListener('click', () => Hub.navigateTo('settings'));
   }
 
-  // Channel buttons
+  // Channel buttons — dynamic from settings
   const channelSelector = document.getElementById('channelSelector');
-  const channels = [
-    { id: 'pinehat', name: 'Pine Hat', color: '#8b5cf6' },
-    { id: 'papertown', name: 'Paper Town', color: '#f59e0b' },
-    { id: 'cortoon', name: 'Cortoon', color: '#22c55e' },
-  ];
+  const channels = Object.entries(Hub.state.channels || {}).map(([id, ch]) => ({
+    id, name: ch.name, color: ch.accent || '#8b5cf6',
+  }));
 
-  channelSelector.innerHTML = `
-    <div class="channel-label">Canal</div>
-    ${channels.map((ch) => `
-      <button class="channel-btn${Hub.state.activeChannel === ch.id ? ' active' : ''}" data-channel="${ch.id}">
-        <span class="channel-dot" style="background:${ch.color}"></span>
-        ${ch.name}
-      </button>
-    `).join('')}
-  `;
-
-  channelSelector.querySelectorAll('.channel-btn').forEach((btn) => {
-    btn.addEventListener('click', () => Hub.setChannel(btn.dataset.channel));
-  });
+  if (channels.length > 0) {
+    channelSelector.innerHTML = `
+      <div class="channel-label">Canal</div>
+      ${channels.map((ch) => `
+        <button class="channel-btn${Hub.state.activeChannel === ch.id ? ' active' : ''}" data-channel="${ch.id}">
+          <span class="channel-dot" style="background:${ch.color}"></span>
+          ${ch.name}
+        </button>
+      `).join('')}
+    `;
+    channelSelector.querySelectorAll('.channel-btn').forEach((btn) => {
+      btn.addEventListener('click', () => Hub.setChannel(btn.dataset.channel));
+    });
+  } else {
+    channelSelector.innerHTML = `
+      <div class="channel-label">Canal</div>
+      <div style="padding:8px 12px;color:var(--text-dim);font-size:12px;">Nenhum canal configurado.<br>Vai a Definições.</div>
+    `;
+  }
 };
 
 // ── Modal close on backdrop click ──

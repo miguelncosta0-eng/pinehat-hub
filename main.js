@@ -1,6 +1,5 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-const { CHANNELS } = require('./main/prompt-templates');
 
 let mainWindow;
 
@@ -17,7 +16,7 @@ function createWindow() {
       nodeIntegration: false,
     },
     frame: true,
-    title: 'PineHat Hub',
+    title: 'Automated',
   });
 
   mainWindow.loadFile('index.html');
@@ -31,10 +30,12 @@ function createWindow() {
   require('./main/ipc-competitors').register();
   require('./main/ipc-editor').register(mainWindow);
   require('./main/ipc-series').register(mainWindow);
+  require('./main/ipc-ideation').register();
+  require('./main/ipc-seo').register();
+
+  require('./main/ipc-chat-projects').register();
   require('./main/ipc-updater').register();
 
-  // Channels config (shared with renderer)
-  ipcMain.handle('get-channels-config', () => CHANNELS);
 }
 
 app.whenReady().then(createWindow);

@@ -2,8 +2,9 @@ const { ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { SCRIPTS_DIR, readJson, writeJson, uuid, ensureDataDir } = require('./ipc-data');
-const { CHANNELS, buildPrompt, getSystemPrompt } = require('./prompt-templates');
+const { getChannels, buildPrompt, getSystemPrompt } = require('./prompt-templates');
 const { getSettings } = require('./ipc-settings');
+const { callAI, CHAT_BASE } = require('./elevate-api');
 
 let currentAbort = null;
 
@@ -89,18 +90,18 @@ function register() {
 
   ipcMain.handle('generate-script', async (event, options) => {
     const settings = getSettings();
-    if (!settings.anthropicApiKey) {
-      return { success: false, error: 'Chave API da Anthropic não configurada. Vai a Definições.' };
+    if (!settings.elevateLabsApiKey) {
+      return { success: false, error: 'Chave API da Elevate Labs não configurada. Vai a Definições.' };
     }
 
     const { title, channel, format, extraNotes, tone, focus, episodes, targetWords: customTargetWords } = options;
-    const channelConfig = CHANNELS[channel];
+    const channelConfig = getChannels()[channel];
     if (!channelConfig) return { success: false, error: 'Canal inválido.' };
 
     const formatConfig = channelConfig.formats.find((f) => f.id === format);
     if (!formatConfig) return { success: false, error: 'Formato inválido.' };
 
-    const model = settings.model || 'claude-opus-4-6';
+    const model = settings.model || 'claude-sonnet-4-5';
     const targetWords = customTargetWords || formatConfig.targetWords;
     const totalChapters = Math.max(1, Math.round((targetWords / formatConfig.targetWords) * formatConfig.chapters));
 
@@ -168,8 +169,8 @@ function register() {
           }
         };
 
-        const result = await callClaudeStreaming(
-          settings.anthropicApiKey,
+        const result = await callStreamingAI(
+          settings.elevateLabsApiKey,
           model,
           getSystemPrompt(channel),
           prompt,
@@ -255,7 +256,7 @@ async function generateSingleCall(event, { title, channel, format, extraNotes, t
   });
 
   const prompt = buildPrompt(channel, format, { title, extraNotes, tone, focus, episodes });
-  const result = await callClaude(settings.anthropicApiKey, model, getSystemPrompt(channel), prompt, 2048);
+  const result = await callAI(settings.elevateLabsApiKey, model, getSystemPrompt(channel), prompt, 2048);
 
   const content = result.content[0].text;
   const script = {
@@ -306,48 +307,22 @@ async function saveGeneratedScript({ title, channel, format, content, model, tot
   return script.id;
 }
 
-// ── Claude API call (non-streaming, kept for Shorts) ──
+// ── Elevate Labs streaming call (OpenAI-compatible SSE) ──
 
-async function callClaude(apiKey, model, systemPrompt, userPrompt, maxTokens = 8192, signal) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+async function callStreamingAI(apiKey, model, systemPrompt, userPrompt, maxTokens, signal, onDelta) {
+  const response = await fetch(`${CHAT_BASE}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
+      'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model,
+      model: model || 'claude-sonnet-4-5',
       max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
-    }),
-    signal,
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`API ${response.status}: ${err.slice(0, 300)}`);
-  }
-
-  return await response.json();
-}
-
-// ── Claude API call (streaming — sends live text deltas) ──
-
-async function callClaudeStreaming(apiKey, model, systemPrompt, userPrompt, maxTokens, signal, onDelta) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
       stream: true,
     }),
     signal,
@@ -361,7 +336,6 @@ async function callClaudeStreaming(apiKey, model, systemPrompt, userPrompt, maxT
   let fullText = '';
   const usage = { input_tokens: 0, output_tokens: 0 };
 
-  // Parse SSE stream
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -372,7 +346,7 @@ async function callClaudeStreaming(apiKey, model, systemPrompt, userPrompt, maxT
 
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
-    buffer = lines.pop(); // keep incomplete line in buffer
+    buffer = lines.pop();
 
     for (const line of lines) {
       if (!line.startsWith('data: ')) continue;
@@ -381,15 +355,15 @@ async function callClaudeStreaming(apiKey, model, systemPrompt, userPrompt, maxT
 
       try {
         const evt = JSON.parse(raw);
-        if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
-          fullText += evt.delta.text;
-          if (onDelta) onDelta(evt.delta.text, fullText);
+        // OpenAI format: choices[0].delta.content
+        const delta = evt.choices?.[0]?.delta?.content;
+        if (delta) {
+          fullText += delta;
+          if (onDelta) onDelta(delta, fullText);
         }
-        if (evt.type === 'message_start' && evt.message?.usage) {
-          usage.input_tokens = evt.message.usage.input_tokens;
-        }
-        if (evt.type === 'message_delta' && evt.usage) {
-          usage.output_tokens = evt.usage.output_tokens;
+        if (evt.usage) {
+          usage.input_tokens = evt.usage.prompt_tokens || 0;
+          usage.output_tokens = evt.usage.completion_tokens || 0;
         }
       } catch (_) { /* skip malformed lines */ }
     }

@@ -184,8 +184,6 @@ Hub._editorRemoveSilence = async function () {
 
   const result = await window.api.editorRemoveSilence({
     audioPath: st.voiceover.path,
-    threshold: -30,
-    minSilenceDuration: 0.5,
   });
 
   st.isRemovingSilence = false;
@@ -751,6 +749,7 @@ Hub._editorRenderMedia = function () {
           <div class="editor-media-summary">
             ${st.episodes.length} episódio${st.episodes.length !== 1 ? 's' : ''} ·
             ${Hub.fmtDur(st.episodes.reduce((sum, ep) => sum + ep.duration, 0))} total
+            <button class="btn btn-small btn-danger" id="editorClearAllEpisodes" style="margin-left:12px">Remover Todos</button>
           </div>
           <div>
             <button class="btn btn-secondary" id="editorPrevStep">← Voiceover</button>
@@ -813,6 +812,13 @@ Hub._editorRenderMedia = function () {
       st.episodes.splice(parseInt(btn.dataset.index), 1);
       Hub._editorRenderStep('media');
     });
+  });
+
+  // Remove all episodes
+  content.querySelector('#editorClearAllEpisodes')?.addEventListener('click', () => {
+    if (!confirm('Remover todos os episódios?')) return;
+    st.episodes = [];
+    Hub._editorRenderStep('media');
   });
 
   // Nav
@@ -1183,21 +1189,27 @@ Hub._editorShowOverlayPreview = function (index) {
     const fs = Math.round((overlay.fontSize || 48) * 0.45);
     const ac = overlay.animation === 'auto' ? 'fade-zoom' : (overlay.animation || 'fade-zoom');
     const d = overlay.duration || 3;
+    const typeLabelsMap = {
+      episode: 'EPISODE', date: 'DATE', rating: 'RATING', character: 'CHARACTER',
+      location: 'LOCATION', statistic: 'STATISTIC', impact: 'IMPACT',
+    };
+    const channelColors = { pinehat: '#8b5cf6', papertown: '#f59e0b', cortoon: '#22c55e' };
+    const accent = channelColors[Hub.state.activeChannel] || '#8b5cf6';
+    const typeLabel = typeLabelsMap[overlay.type] || '';
 
-    if (overlay.isCountingNumber && overlay.numberValue != null) {
-      screen.innerHTML = `
-        <div class="overlay-preview-text preview-anim-${ac}" style="color:${c};font-size:${fs + 10}px;animation-duration:${d}s;">
-          ${overlay.numberPrefix || ''}${overlay.numberValue}${overlay.numberUnit ? ' ' + overlay.numberUnit : ''}
-        </div>
-        ${overlay.numberLabel ? `<div class="overlay-preview-label preview-anim-${ac}" style="color:${c};opacity:0.7;animation-duration:${d}s;">${overlay.numberLabel}</div>` : ''}
-      `;
-    } else {
-      screen.innerHTML = `
-        <div class="overlay-preview-text preview-anim-${ac}" style="color:${c};font-size:${fs}px;animation-duration:${d}s;">
-          ${overlay.text}
-        </div>
-      `;
-    }
+    const cardContent = overlay.isCountingNumber && overlay.numberValue != null
+      ? `<div class="overlay-card-label preview-anim-${ac}" style="color:${accent};animation-duration:${d}s;">${typeLabel || overlay.numberLabel || ''}</div>
+         <div class="overlay-card-value preview-anim-${ac}" style="color:${c};font-size:${fs + 14}px;animation-duration:${d}s;">
+           ${overlay.numberPrefix || ''}${overlay.numberValue}${overlay.numberUnit ? ' ' + overlay.numberUnit : ''}
+         </div>`
+      : `<div class="overlay-card-label preview-anim-${ac}" style="color:${accent};animation-duration:${d}s;">${typeLabel}</div>
+         <div class="overlay-card-value preview-anim-${ac}" style="color:${c};font-size:${fs}px;animation-duration:${d}s;">${overlay.text}</div>`;
+
+    screen.innerHTML = `
+      <div class="overlay-preview-card preview-anim-${ac}" style="border-top: 3px solid ${accent};animation-duration:${d}s;">
+        ${cardContent}
+      </div>
+    `;
   }
 
   renderPreview();

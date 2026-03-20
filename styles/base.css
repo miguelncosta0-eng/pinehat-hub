@@ -1,26 +1,28 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg: #0D0D0F;
-  --surface: #131316;
-  --surface2: #1a1a1e;
-  --surface3: #222226;
-  --border: #252528;
-  --border-light: #333336;
-  --text: #eaeaea;
-  --text-dim: #5a5a5f;
-  --text-mid: #8a8a8f;
+  --bg: #191919;
+  --surface: #202020;
+  --surface2: #2a2a2a;
+  --surface3: #333333;
+  --border: #2e2e2e;
+  --border-light: #3e3e3e;
+  --text: #ebebeb;
+  --text-dim: #6b6b6b;
+  --text-mid: #9b9b9b;
   --green: #22c55e;
   --red: #ef4444;
   --orange: #f59e0b;
   --accent: #8b5cf6;
   --accent-hover: #7c3aed;
   --accent-glow: rgba(139, 92, 246, 0.10);
+  --hover-bg: rgba(255, 255, 255, 0.03);
+  --surface-hover: rgba(255, 255, 255, 0.04);
   --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', 'Consolas', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --radius: 8px;
-  --radius-sm: 6px;
-  --radius-lg: 12px;
+  --radius: 6px;
+  --radius-sm: 4px;
+  --radius-lg: 8px;
 }
 
 /* Channel themes */
@@ -49,6 +51,8 @@ body {
   user-select: none;
   font-size: 13px;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .app {
@@ -69,10 +73,10 @@ body {
   color: white;
 }
 
-::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.12); }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }

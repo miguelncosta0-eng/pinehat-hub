@@ -4,6 +4,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const { DATA_DIR, readJson, writeJson, uuid, ensureDataDir } = require('./ipc-data');
 const { getSettings } = require('./ipc-settings');
+const { CHAT_BASE } = require('./elevate-api');
 
 const SERIES_FILE = path.join(DATA_DIR, 'series.json');
 const FRAMES_DIR  = path.join(DATA_DIR, 'series_frames');
@@ -118,7 +119,7 @@ function register(mainWindow) {
 
     // 1. Check API key
     const settings = getSettings();
-    steps.push({ step: 'API key', ok: !!settings.anthropicApiKey, detail: settings.anthropicApiKey ? `set (${settings.anthropicApiKey.length} chars)` : 'MISSING' });
+    steps.push({ step: 'API key', ok: !!settings.elevateLabsApiKey, detail: settings.elevateLabsApiKey ? `set (${settings.elevateLabsApiKey.length} chars)` : 'MISSING' });
 
     // 2. Check file exists
     steps.push({ step: 'Ficheiro', ok: fs.existsSync(ep.filePath), detail: ep.filePath });
@@ -184,8 +185,8 @@ function register(mainWindow) {
     L(`analysisCancelled at start: ${analysisCancelled}`);
 
     const settings = getSettings();
-    L(`API key: ${settings.anthropicApiKey ? 'set' : 'MISSING'}`);
-    if (!settings.anthropicApiKey) return { log };
+    L(`API key: ${settings.elevateLabsApiKey ? 'set' : 'MISSING'}`);
+    if (!settings.elevateLabsApiKey) return { log };
 
     const duration = await getVideoDuration(ep.filePath);
     L(`Duration: ${duration}s`);
@@ -221,19 +222,19 @@ function register(mainWindow) {
       try {
         const base64 = fs.readFileSync(framePath).toString('base64');
         L(`  base64: ${base64.length} chars`);
-        const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        const resp = await fetch(`${CHAT_BASE}/chat/completions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': settings.anthropicApiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 100,
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.elevateLabsApiKey}` },
+          body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 100,
             messages: [{ role: 'user', content: [
-              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } },
               { type: 'text', text: 'Describe this frame in 1 sentence.' },
             ]}],
           }),
         });
         if (!resp.ok) throw new Error(`API ${resp.status}: ${(await resp.text()).slice(0, 100)}`);
         const data = await resp.json();
-        L(`  Claude: "${data.content[0].text.trim().slice(0, 80)}"`);
+        L(`  AI: "${(data.choices?.[0]?.message?.content || '').trim().slice(0, 80)}"`);
       } catch (e) {
         L(`  Claude: FAILED — ${e.message}`);
       }
@@ -317,7 +318,7 @@ function register(mainWindow) {
   ipcMain.handle('series-analyze-episode', async (_event, { seriesId, episodeCode }) => {
     analysisCancelled = false;
     const settings = getSettings();
-    if (!settings.anthropicApiKey) return { success: false, error: 'API key não configurada nas Definições' };
+    if (!settings.elevateLabsApiKey) return { success: false, error: 'API key não configurada nas Definições' };
 
     const all = getSeries();
     const sIdx = all.findIndex(s => s.id === seriesId);
@@ -379,20 +380,19 @@ function register(mainWindow) {
       // Analyze with Claude via fetch (same as editor)
       try {
         const base64 = fs.readFileSync(framePath).toString('base64');
-        const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        const resp = await fetch(`${CHAT_BASE}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': settings.anthropicApiKey,
-            'anthropic-version': '2023-06-01',
+            'Authorization': `Bearer ${settings.elevateLabsApiKey}`,
           },
           body: JSON.stringify({
-            model: 'claude-haiku-4-5-20251001',
+            model: 'claude-sonnet-4-5',
             max_tokens: 150,
             messages: [{
               role: 'user',
               content: [
-                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+                { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } },
                 { type: 'text', text: `Frame from "${series.name}" ${episodeCode} at ~${Math.floor(timeSeconds / 60)}min. Briefly describe: characters present, what is happening, setting. 1-2 sentences.` },
               ],
             }],
@@ -403,7 +403,7 @@ function register(mainWindow) {
           throw new Error(`API ${resp.status}: ${errText.slice(0, 150)}`);
         }
         const data = await resp.json();
-        scenes.push({ time: timeSeconds, description: data.content[0].text.trim() });
+        scenes.push({ time: timeSeconds, description: (data.choices?.[0]?.message?.content || '').trim() });
       } catch (claudeErr) {
         console.error(`[Series] Claude analysis failed ${episodeCode} @${timeSeconds}s:`, claudeErr.message);
         scenes.push({ time: timeSeconds, description: '' });
@@ -449,7 +449,7 @@ function register(mainWindow) {
   // ── AI Clip Assignment ──
   ipcMain.handle('series-assign-clips', async (_event, { seriesId, segments }) => {
     const settings = getSettings();
-    if (!settings.anthropicApiKey) return { success: false, error: 'API key não configurada' };
+    if (!settings.elevateLabsApiKey) return { success: false, error: 'API key não configurada' };
 
     const all = getSeries();
     const series = all.find(s => s.id === seriesId);
@@ -481,15 +481,14 @@ function register(mainWindow) {
 
       console.log(`[series-assign] Batch ${Math.floor(batch / BATCH_SIZE) + 1}: ${batchSegments.length} segments, ${analyzed.length} episodes`);
 
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      const resp = await fetch(`${CHAT_BASE}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': settings.anthropicApiKey,
-          'anthropic-version': '2023-06-01',
+          'Authorization': `Bearer ${settings.elevateLabsApiKey}`,
         },
         body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
+          model: 'claude-sonnet-4-5',
           max_tokens: 4096,
           messages: [{
             role: 'user',
@@ -516,7 +515,7 @@ Use only episode codes and timestamps that exist in the database above. No expla
 
       try {
         const respData = await resp.json();
-        const text = respData.content[0].text.trim();
+        const text = (respData.choices?.[0]?.message?.content || respData.content?.[0]?.text || '').trim();
         console.log(`[series-assign] Response text (first 300): ${text.slice(0, 300)}`);
         // Find the largest JSON array in the response (greedy match)
         const match = text.match(/\[[\s\S]*\]/);

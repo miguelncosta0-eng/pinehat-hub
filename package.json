@@ -1,9 +1,9 @@
 {
-  "name": "pinehat-hub",
-  "version": "2.0.0",
+  "name": "automated",
+  "version": "2.1.0",
   "description": "YouTube Production Hub — Scripts, B-Roll, Projects",
   "main": "main.js",
-  "author": "PineHat",
+  "author": "Automated",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
@@ -14,8 +14,8 @@
     "build:mac:dir": "electron-builder --mac --dir"
   },
   "build": {
-    "appId": "com.pinehat.hub",
-    "productName": "PineHat Hub",
+    "appId": "com.automated.app",
+    "productName": "Automated",
     "directories": {
       "output": "dist"
     },
@@ -28,15 +28,7 @@
       "styles/**/*",
       "assets/**/*"
     ],
-    "extraResources": [
-      {
-        "from": "library",
-        "to": "library",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
+    "extraResources": [],
     "win": {
       "target": [
         {
@@ -67,7 +59,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "PineHat Hub"
+      "shortcutName": "Automated"
     },
     "publish": {
       "provider": "github",
@@ -80,6 +72,7 @@
     "electron-builder": "^25.1.8"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.99.3",
     "electron-updater": "^6.8.3",
     "msedge-tts": "^2.0.4",
     "yt-transcript-api": "^1.0.8"

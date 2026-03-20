@@ -115,7 +115,7 @@ async function fetchChannelData(channelId, apiKey) {
   };
 }
 
-async function fetchRecentVideos(channelId, apiKey, maxResults = 6) {
+async function fetchRecentVideos(channelId, apiKey, maxResults = 20) {
   // Use playlistItems (1 quota unit) instead of search (100 units)
   const uploadsPlaylistId = 'UU' + channelId.slice(2);
   const playlist = await ytApiFetch('playlistItems', {

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('api', {
   libraryAddFiles: (opts) => ipcRenderer.invoke('library-add-files', opts),
   libraryRemoveFile: (opts) => ipcRenderer.invoke('library-remove-file', opts),
   selectFiles: () => ipcRenderer.invoke('select-files'),
+  selectImage: () => ipcRenderer.invoke('select-image'),
   selectOutputFolder: () => ipcRenderer.invoke('select-output-folder'),
   getMediaInfo: (filePath) => ipcRenderer.invoke('get-media-info', filePath),
   getFileDir: (filePath) => ipcRenderer.invoke('get-file-dir', filePath),
@@ -103,6 +104,41 @@ contextBridge.exposeInMainWorld('api', {
   seriesDiagnose: (id) => ipcRenderer.invoke('series-diagnose', id),
   seriesTraceOne: (id) => ipcRenderer.invoke('series-trace-one', id),
   onSeriesAnalyzeProgress: (cb) => ipcRenderer.on('series-analyze-progress', (_, d) => cb(d)),
+
+  // ── Voiceover TTS (Elevate Labs) ──
+  voiceoverGenerateTts: (opts) => ipcRenderer.invoke('voiceover-generate-tts', opts),
+  onVoiceoverTtsProgress: (cb) => ipcRenderer.on('voiceover-tts-progress', (_, d) => cb(d)),
+
+  // ── Ideation ──
+  ideationGenerate: (opts) => ipcRenderer.invoke('ideation-generate', opts),
+  ideationGetHistory: (channel) => ipcRenderer.invoke('ideation-get-history', channel),
+  ideationDelete: (opts) => ipcRenderer.invoke('ideation-delete', opts),
+
+  // ── SEO ──
+  seoGenerate: (opts) => ipcRenderer.invoke('seo-generate', opts),
+  seoGetHistory: (channel) => ipcRenderer.invoke('seo-get-history', channel),
+  seoDelete: (opts) => ipcRenderer.invoke('seo-delete', opts),
+
+  // ── Channel Sharing ──
+  shareChannel: (channelId) => ipcRenderer.invoke('share-channel', channelId),
+  joinChannel: (channelId, code) => ipcRenderer.invoke('join-channel', channelId, code),
+  unshareChannel: (channelId) => ipcRenderer.invoke('unshare-channel', channelId),
+  getShareInfo: (channelId) => ipcRenderer.invoke('get-share-info', channelId),
+  onProjectsChanged: (cb) => ipcRenderer.on('projects-changed', (_, d) => cb(d)),
+  onChatProjectsChanged: (cb) => ipcRenderer.on('chat-projects-changed', (_, d) => cb(d)),
+
+  // ── Chat Projects ──
+  getChatProjects: () => ipcRenderer.invoke('get-chat-projects'),
+  createChatProject: (data) => ipcRenderer.invoke('create-chat-project', data),
+  updateChatProject: (id, data) => ipcRenderer.invoke('update-chat-project', id, data),
+  deleteChatProject: (id) => ipcRenderer.invoke('delete-chat-project', id),
+  chatSendMessage: (projectId, message) => ipcRenderer.invoke('chat-send-message', projectId, message),
+  chatStopStreaming: (projectId) => ipcRenderer.invoke('chat-stop-streaming', projectId),
+  chatClearHistory: (projectId) => ipcRenderer.invoke('chat-clear-history', projectId),
+  chatAddFile: (projectId) => ipcRenderer.invoke('chat-add-file', projectId),
+  chatRemoveFile: (projectId, fileIdx) => ipcRenderer.invoke('chat-remove-file', projectId, fileIdx),
+  onChatStreamDelta: (cb) => ipcRenderer.on('chat-stream-delta', (_, d) => cb(d)),
+  onChatStreamDone: (cb) => ipcRenderer.on('chat-stream-done', (_, d) => cb(d)),
 
   // ── Auto-Update ──
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_, d) => cb(d)),

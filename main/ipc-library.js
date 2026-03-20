@@ -112,6 +112,14 @@ function register(mainWindow) {
     return result.filePaths;
   });
 
+  ipcMain.handle('select-image', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp'] }],
+    });
+    return result.filePaths[0] || null;
+  });
+
   ipcMain.handle('select-output-folder', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openDirectory', 'createDirectory'],

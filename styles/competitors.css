@@ -13,13 +13,14 @@
 /* Card */
 .comp-card {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border: none;
+  border-radius: 6px;
   padding: 16px;
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition: box-shadow 0.2s;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
-.comp-card:hover { border-color: var(--border-light); }
+.comp-card:hover { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.15); }
 
 .comp-card-header {
   display: flex;
@@ -69,14 +70,12 @@
 .comp-stat-value {
   font-size: 18px;
   font-weight: 700;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   color: var(--accent);
 }
 .comp-stat-label {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
   margin-top: 2px;
 }
 .comp-updated {
@@ -126,10 +125,8 @@
 
 /* Recent videos */
 .comp-videos-section h4 {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
   color: var(--text-mid);
   margin-bottom: 10px;
 }
@@ -235,15 +232,14 @@
 /* Chart sections */
 .chart-section {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border: none;
+  border-radius: 6px;
   padding: 16px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 .chart-section h4 {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
   color: var(--text-mid);
   margin-bottom: 12px;
 }
