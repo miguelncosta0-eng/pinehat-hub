@@ -386,7 +386,10 @@ Hub.renderSettings = async function () {
       btn.textContent = 'A partilhar...';
       const result = await window.api.shareChannel(btn.dataset.id);
       if (result.success) {
-        Hub.showToast(`Canal partilhado! Código: ${result.code}`);
+        // Auto-sync local projects to cloud
+        const syncResult = await window.api.syncProjectsToCloud(btn.dataset.id);
+        const syncMsg = syncResult.synced > 0 ? ` (${syncResult.synced} projetos sincronizados)` : '';
+        Hub.showToast(`Canal partilhado! Código: ${result.code}${syncMsg}`);
         Hub.state.settings = await window.api.getSettings();
         Hub.state.channels = Hub.state.settings.channels || {};
         Hub.renderSettings();

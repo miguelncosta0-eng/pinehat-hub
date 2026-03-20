@@ -267,6 +267,55 @@ function register() {
     saveLocalProjects(projects);
     return { success: true };
   });
+
+  // Sync local projects to Supabase for a shared channel
+  ipcMain.handle('sync-projects-to-cloud', async (_event, channelId) => {
+    if (!isChannelShared(channelId)) {
+      return { success: false, error: 'Canal não está partilhado.' };
+    }
+
+    const supabaseChannelId = getSupabaseChannelId(channelId);
+    if (!supabaseChannelId) return { success: false, error: 'Canal Supabase não encontrado.' };
+
+    // Get local projects for this channel
+    const localProjects = getLocalProjects().filter(p => p.channel === channelId);
+    if (localProjects.length === 0) return { success: true, synced: 0 };
+
+    // Check which already exist in Supabase (by title to avoid duplicates)
+    const supabase = getSupabase();
+    const { data: existing } = await supabase
+      .from('shared_projects')
+      .select('title')
+      .eq('channel_id', supabaseChannelId);
+
+    const existingTitles = new Set((existing || []).map(r => r.title));
+
+    let synced = 0;
+    for (const p of localProjects) {
+      if (existingTitles.has(p.title)) continue; // Skip duplicates
+
+      const { error } = await supabase
+        .from('shared_projects')
+        .insert({
+          channel_id: supabaseChannelId,
+          title: p.title,
+          state: p.state || 'ideia',
+          format: p.format || null,
+          script_id: p.scriptId || null,
+          youtube_url: p.youtubeUrl || null,
+          publish_date: p.publishDate || null,
+          notes: p.notes || '',
+          checklist: p.checklist || {},
+          created_by: 'Windows',
+        });
+
+      if (!error) synced++;
+      else console.error('[Projects] Sync error for', p.title, ':', error.message);
+    }
+
+    console.log(`[Projects] Synced ${synced}/${localProjects.length} projects to cloud`);
+    return { success: true, synced };
+  });
 }
 
 module.exports = { register };
