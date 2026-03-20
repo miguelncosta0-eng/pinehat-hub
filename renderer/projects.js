@@ -411,7 +411,7 @@ Hub.openNewProjectModal = async function (defaultDate) {
 
 // ── Project detail modal ──
 Hub._openProjectDetail = async function (projectId) {
-  const projects = await window.api.getProjects({});
+  const projects = await window.api.getProjects({ channel: Hub.state.activeChannel });
   const project = projects.find((p) => p.id === projectId);
   if (!project) return;
 

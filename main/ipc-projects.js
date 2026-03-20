@@ -230,18 +230,21 @@ function register() {
   });
 
   ipcMain.handle('update-project', async (_event, id, updates) => {
-    // Try cloud first — UUIDs from Supabase will match
-    // Check if any shared channel could own this project
-    const settings = getSettings();
-    const channels = settings.channels || {};
-    for (const [chId, ch] of Object.entries(channels)) {
-      if (ch.shared && ch.supabaseChannelId) {
-        const result = await updateCloudProject(id, updates);
-        if (result.success) return result;
-      }
+    // Check if this project exists in Supabase first
+    const supabase = getSupabase();
+    const { data: cloudRow } = await supabase
+      .from('shared_projects')
+      .select('id')
+      .eq('id', id)
+      .single();
+
+    if (cloudRow) {
+      // Project exists in cloud — update there
+      const result = await updateCloudProject(id, updates);
+      return result;
     }
 
-    // Local fallback
+    // Local project
     const projects = getLocalProjects();
     const idx = projects.findIndex((p) => p.id === id);
     if (idx === -1) return { success: false, error: 'Projeto não encontrado.' };
@@ -251,17 +254,19 @@ function register() {
   });
 
   ipcMain.handle('delete-project', async (_event, id) => {
-    // Try cloud first
-    const settings = getSettings();
-    const channels = settings.channels || {};
-    for (const [chId, ch] of Object.entries(channels)) {
-      if (ch.shared && ch.supabaseChannelId) {
-        const result = await deleteCloudProject(id);
-        if (result.success) return result;
-      }
+    // Check if this project exists in Supabase
+    const supabase = getSupabase();
+    const { data: cloudRow } = await supabase
+      .from('shared_projects')
+      .select('id')
+      .eq('id', id)
+      .single();
+
+    if (cloudRow) {
+      return await deleteCloudProject(id);
     }
 
-    // Local fallback
+    // Local project
     let projects = getLocalProjects();
     projects = projects.filter((p) => p.id !== id);
     saveLocalProjects(projects);
