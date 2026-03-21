@@ -440,6 +440,7 @@ async function getSceneEmbeddings(scenes, openaiKey, onProgress) {
 }
 
 function findBestScenesByEmbedding(scenes, embeddingsCache, queryEmbedding, voText, charAliases, usedSceneIds, maxScenes = 30) {
+  if (!embeddingsCache || !queryEmbedding) return [];
   const scored = [];
   const mentionedChars = findMentionedChars(voText, charAliases);
   const voLow = voText.toLowerCase();
