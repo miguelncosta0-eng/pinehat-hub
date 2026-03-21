@@ -191,9 +191,9 @@ JSON ARRAY:`;
     if (!content) {
       const reason = data.choices?.[0]?.finish_reason || 'unknown';
       const errMsg = data.error?.message || '';
-      console.error(`[SmartEditor] Empty response. Reason: ${reason}, Error: ${errMsg}`);
-      console.error(`[SmartEditor] Full response:`, JSON.stringify(data));
-      throw new Error(`AI devolveu resposta vazia (${reason}). ${errMsg ? 'Erro: ' + errMsg : 'Tenta novamente.'}`);
+      const rawStr = JSON.stringify(data).slice(0, 400);
+      console.error(`[SmartEditor] Empty response. Full:`, JSON.stringify(data));
+      throw new Error(`Resposta vazia (${reason}). Raw: ${rawStr}`);
     }
 
     // Parse JSON from response — handle markdown code blocks, raw JSON, etc.
