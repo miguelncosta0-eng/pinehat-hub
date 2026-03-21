@@ -206,10 +206,21 @@ function register() {
   ipcMain.handle('get-projects', async (_event, filters) => {
     const channelId = filters?.channel;
 
-    // If channel is shared, fetch from Supabase
+    // If channel is shared, fetch from Supabase + local fallback
     if (channelId && isChannelShared(channelId)) {
       subscribeToChannel(channelId);
-      return getCloudProjects(channelId);
+      try {
+        const cloudProjects = await getCloudProjects(channelId);
+        // Also include any local projects for this channel (fallback)
+        const localProjects = getLocalProjects().filter(p => p.channel === channelId);
+        // Merge: cloud first, then local (avoid duplicates by ID)
+        const cloudIds = new Set(cloudProjects.map(p => p.id));
+        const merged = [...cloudProjects, ...localProjects.filter(p => !cloudIds.has(p.id))];
+        return merged;
+      } catch (err) {
+        console.error('[Projects] Cloud fetch failed, using local:', err.message);
+        return getLocalProjects().filter(p => p.channel === channelId);
+      }
     }
 
     // Otherwise, local
@@ -224,11 +235,18 @@ function register() {
     const channelId = data.channel || 'pinehat';
 
     if (isChannelShared(channelId)) {
-      const project = await createCloudProject(channelId, data);
-      if (project) return project;
-      // Fallback to local if cloud fails
+      try {
+        const project = await createCloudProject(channelId, data);
+        if (project) {
+          notifyProjectsChanged();
+          return project;
+        }
+      } catch (err) {
+        console.error('[Projects] Cloud create failed:', err.message);
+      }
     }
 
+    // Local create (for non-shared channels, or cloud fallback)
     const projects = getLocalProjects();
     const project = {
       id: uuid(),
@@ -247,6 +265,7 @@ function register() {
     };
     projects.push(project);
     saveLocalProjects(projects);
+    notifyProjectsChanged();
     return project;
   });
 

@@ -32,6 +32,19 @@ Hub.state = {
   // Series
   viewingSeries: null, // series id when viewing detail
 
+  // Voiceover
+  voiceover: {},
+
+  // Smart Editor
+  smartEditor: {
+    scriptId: null,
+    voiceoverPath: null,
+    seriesIds: [],
+    outputFolder: null,
+    step: 'setup',
+    isGenerating: false,
+  },
+
   // Editor
   editor: {
     projectId: null,

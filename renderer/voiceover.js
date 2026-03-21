@@ -2,7 +2,8 @@ window.Hub = window.Hub || {};
 
 Hub.renderVoiceover = function () {
   const panel = document.getElementById('panel-voiceover');
-  const vo = Hub.state.voiceover || {};
+  if (!Hub.state.voiceover) Hub.state.voiceover = {};
+  const vo = Hub.state.voiceover;
 
   panel.innerHTML = `
     <div class="section-header">
