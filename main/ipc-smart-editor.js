@@ -183,7 +183,14 @@ function scoreScene(scene, voText, mentionedChars, contextKeywords) {
     const anyMatch = scene.chars.some(c =>
       mentionedChars.some(m => m.includes(c) || c.includes(m.split(' ')[0]))
     );
-    if (!anyMatch) score -= 5; // penalty for wrong characters
+    if (!anyMatch) score -= 15; // strong penalty for wrong characters
+  }
+
+  // Extra penalty: if voiceover talks about kids/fun/solving mysteries and scene shows villains
+  if (/kid|child|fun|play|mystery|solving|bond|heart|together/i.test(voLow)) {
+    if (scene.chars.some(c => /bill|cipher|gideon|ghost|monster|demon/i.test(c))) {
+      score -= 20; // don't show villains when talking about fun/kids
+    }
   }
 
   // ── KEYWORD MATCHING ──
@@ -242,12 +249,13 @@ function findBestScenes(allScenes, episodeSummaries, voText, charAliases, usedSc
 
   console.log(`[SmartEditor] Matching: chars=[${mentionedChars.join(',')}], keywords=${keywords.length}`);
 
-  // Score all unused scenes
+  // Score all unused scenes (skip empty descriptions)
   const scored = [];
   for (const scene of allScenes) {
-    if (usedSceneIds.has(scene.id)) continue; // skip used scenes
+    if (usedSceneIds.has(scene.id)) continue;
+    if (!scene.desc || scene.desc.length < 10) continue; // skip empty/broken scenes
     const score = scoreScene(scene, voText, mentionedChars, keywords);
-    if (score > 0) scored.push({ ...scene, score });
+    if (score >= 10) scored.push({ ...scene, score }); // minimum threshold
   }
 
   // Sort by score
@@ -462,23 +470,27 @@ function validatePlan(plan, seriesData, audioDuration) {
     lastEnd = item.endTime;
   }
 
-  // Fill tail — extend to full audio duration
+  // Fill tail — extend to full audio duration using previous segments' episodes
   if (audioDuration && lastEnd < audioDuration - 1) {
     let t = lastEnd;
-    const lastItem = final[final.length - 1] || { episode: 'S01E01', sceneTime: 60 };
+    // Cycle through previous items to get varied episodes/scenes
+    let cycleIdx = 0;
     while (t < audioDuration - 0.5) {
-      const dur = Math.min(8, audioDuration - t);
+      const dur = Math.min(6, audioDuration - t);
       if (dur < 1) break;
+      // Pick from existing items, shifting the sceneTime
+      const sourceItem = final.length > 0 ? final[cycleIdx % final.length] : { episode: 'S01E01', sceneTime: 60 };
       final.push({
         startTime: t,
         endTime: t + dur,
         type: 'still_frame',
-        episode: lastItem.episode,
-        sceneTime: (lastItem.sceneTime || 0) + 30 + Math.floor(Math.random() * 120),
+        episode: sourceItem.episode,
+        sceneTime: (sourceItem.sceneTime || 0) + 40 + Math.floor(Math.random() * 80),
         effect: effects[final.length % 4],
         clipDuration: 5,
       });
       t += dur;
+      cycleIdx++;
     }
   }
 
