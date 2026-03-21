@@ -439,8 +439,15 @@ async function getSceneEmbeddings(scenes, openaiKey, onProgress) {
   return cache;
 }
 
-function findBestScenesByEmbedding(scenes, embeddingsCache, queryEmbedding, usedSceneIds, maxScenes = 30) {
+function findBestScenesByEmbedding(scenes, embeddingsCache, queryEmbedding, voText, charAliases, usedSceneIds, maxScenes = 30) {
   const scored = [];
+  const mentionedChars = findMentionedChars(voText, charAliases);
+  const voLow = voText.toLowerCase();
+
+  // Detect if voiceover is about positive/fun/kids topics
+  const isPositiveTopic = /kid|child|fun|play|solving|bond|heart|together|friend|brother|sister|love|being kids|mysteries|adventure|laugh|happy/i.test(voLow);
+  // Detect if voiceover specifically mentions villains
+  const mentionsVillain = /bill|cipher|dream demon|gideon|villain|evil|enemy/i.test(voLow);
 
   for (const scene of scenes) {
     if (usedSceneIds.has(scene.id)) continue;
@@ -450,7 +457,37 @@ function findBestScenesByEmbedding(scenes, embeddingsCache, queryEmbedding, used
     if (!sceneEmb) continue;
 
     const similarity = cosineSimilarity(queryEmbedding, sceneEmb);
-    scored.push({ ...scene, score: Math.round(similarity * 100) });
+    let score = Math.round(similarity * 100);
+    const descLow = scene.desc.toLowerCase();
+
+    // ── CHARACTER BONUSES/PENALTIES on top of embedding score ──
+
+    // Boost scenes with mentioned characters in description
+    for (const char of mentionedChars) {
+      const parts = char.split(/\s+/);
+      for (const p of parts) {
+        if (p.length > 2 && descLow.includes(p)) score += 15;
+      }
+    }
+
+    // If talking about positive/fun topics and NOT mentioning villains,
+    // heavily penalize villain scenes
+    if (isPositiveTopic && !mentionsVillain) {
+      if (/bill cipher|gideon|triangle|demon|evil|menacing|ominous|sinister|cipher|villain|chaotic|vortex|attack|wreckage/i.test(descLow)) {
+        score -= 40;
+      }
+      // Boost protagonist scenes for positive topics
+      if (/dipper/i.test(descLow) && /mabel/i.test(descLow)) score += 15;
+      else if (/dipper|mabel/i.test(descLow)) score += 8;
+    }
+
+    // If mentioning specific characters, penalize scenes showing wrong characters prominently
+    if (mentionedChars.length > 0) {
+      const anyMentionedInDesc = mentionedChars.some(c => c.split(/\s+/).some(p => p.length > 2 && descLow.includes(p)));
+      if (!anyMentionedInDesc) score -= 10;
+    }
+
+    if (score > 0) scored.push({ ...scene, score });
   }
 
   scored.sort((a, b) => b.score - a.score);
@@ -527,7 +564,7 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
     let bestScenes;
     if (useEmbeddings) {
       bestScenes = findBestScenesByEmbedding(
-        sceneDB.scenes, embeddingsCache, segmentEmbeddings[i], usedSceneIds, 30
+        sceneDB.scenes, embeddingsCache, segmentEmbeddings[i], seg.text, charAliases, usedSceneIds, 30
       );
     } else {
       bestScenes = findBestScenes(
