@@ -899,6 +899,168 @@ function register(mainWindow) {
     if (currentProcess) try { currentProcess.kill('SIGTERM'); } catch (_) {}
     return { success: true };
   });
+
+  // ── Thumbnail extraction for timeline preview ──
+  ipcMain.handle('smart-editor-get-thumbnail', async (_event, { episode, sceneTime, seriesIds }) => {
+    try {
+      const seriesData = readJson(path.join(DATA_DIR, 'series.json'));
+      const allSeries = seriesData?.series || [];
+      const ids = Array.isArray(seriesIds) ? seriesIds : [seriesIds];
+
+      // Find episode file path
+      let filePath = null;
+      for (const sid of ids) {
+        const s = allSeries.find(x => x.id === sid);
+        if (!s) continue;
+        const ep = (s.episodes || []).find(e => e.code === episode);
+        if (ep?.filePath && fs.existsSync(ep.filePath)) {
+          filePath = ep.filePath;
+          break;
+        }
+      }
+
+      if (!filePath) return { success: false, error: 'Episode not found' };
+
+      const ffmpegPath = findBinary('ffmpeg');
+      const tmpPath = path.join(os.tmpdir(), `se_thumb_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`);
+
+      await runFfmpeg(ffmpegPath, [
+        '-ss', String(sceneTime), '-i', filePath,
+        '-vframes', '1', '-vf', 'scale=160:90', '-q:v', '5', '-y', tmpPath,
+      ], null, 15000);
+
+      if (!fs.existsSync(tmpPath)) return { success: false, error: 'Frame extraction failed' };
+
+      const base64 = fs.readFileSync(tmpPath).toString('base64');
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
+      return { success: true, data: `data:image/jpeg;base64,${base64}` };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Get alternative scenes for a voiceover segment ──
+  ipcMain.handle('smart-editor-get-alternatives', async (_event, { segmentText, currentEpisode, currentTime, seriesIds, excludeIds }) => {
+    try {
+      const seriesData = readJson(path.join(DATA_DIR, 'series.json'));
+      const allSeries = seriesData?.series || [];
+      const ids = Array.isArray(seriesIds) ? seriesIds : [seriesIds];
+
+      const seriesToSearch = [];
+      let characters = [];
+      for (const sid of ids) {
+        const s = allSeries.find(x => x.id === sid);
+        if (s) { seriesToSearch.push(s); characters.push(...(s.characters || [])); }
+      }
+
+      const sceneDB = buildSceneDB(seriesToSearch);
+      const charAliases = buildCharAliases(characters);
+      const excludeSet = new Set(excludeIds || []);
+      excludeSet.add(`${currentEpisode}@${currentTime}`);
+
+      const bestScenes = findBestScenes(
+        sceneDB.scenes, sceneDB.episodeSummaries,
+        segmentText, charAliases, excludeSet, 10
+      );
+
+      // Extract thumbnails for top 5
+      const ffmpegPath = findBinary('ffmpeg');
+      const results = [];
+
+      for (const scene of bestScenes.slice(0, 5)) {
+        if (!scene.filePath || !fs.existsSync(scene.filePath)) continue;
+
+        const tmpPath = path.join(os.tmpdir(), `se_alt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`);
+        try {
+          await runFfmpeg(ffmpegPath, [
+            '-ss', String(scene.time), '-i', scene.filePath,
+            '-vframes', '1', '-vf', 'scale=120:68', '-q:v', '6', '-y', tmpPath,
+          ], null, 10000);
+
+          const base64 = fs.readFileSync(tmpPath).toString('base64');
+          try { fs.unlinkSync(tmpPath); } catch (_) {}
+
+          results.push({
+            episode: scene.episode,
+            sceneTime: scene.time,
+            score: scene.score,
+            desc: scene.desc?.slice(0, 100) || '',
+            chars: scene.chars || [],
+            thumbnail: `data:image/jpeg;base64,${base64}`,
+          });
+        } catch (_) {}
+      }
+
+      return { success: true, alternatives: results };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Save edited plan ──
+  ipcMain.handle('smart-editor-save-plan', async (_event, planData) => {
+    try {
+      ensureSmartDir();
+      const planPath = path.join(SMART_DIR, `${planData.id}.json`);
+      writeJson(planPath, planData);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Load plan ──
+  ipcMain.handle('smart-editor-load-plan', async (_event, planId) => {
+    try {
+      const planPath = path.join(SMART_DIR, `${planId}.json`);
+      const data = readJson(planPath);
+      if (!data) return { success: false, error: 'Plan not found' };
+      return { success: true, plan: data };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Export from edited plan ──
+  ipcMain.handle('smart-editor-export', async (_event, { planId, outputFolder, outputFilename }) => {
+    try {
+      const planPath = path.join(SMART_DIR, `${planId}.json`);
+      const planData = readJson(planPath);
+      if (!planData) return { success: false, error: 'Plan not found' };
+
+      const seriesData = readJson(path.join(DATA_DIR, 'series.json'));
+      const allSeries = seriesData?.series || [];
+
+      // Build combined series data
+      let combined = { episodes: [] };
+      for (const s of allSeries) {
+        combined.episodes.push(...(s.episodes || []));
+      }
+
+      cancelled = false;
+      const tmpDir = path.join(os.tmpdir(), `pinehat-export-${Date.now()}`);
+      fs.mkdirSync(tmpDir, { recursive: true });
+
+      const plan = planData.plan || [];
+      send({ phase: 'extracting', percent: 0, detail: 'A extrair segmentos...' });
+
+      await extractAssets(plan, combined, tmpDir, (p) => {
+        send({ phase: 'extracting', percent: Math.round(p.percent * 0.7), detail: p.detail, current: p.current, total: p.total });
+      });
+
+      const finalOut = path.join(outputFolder || tmpDir, outputFilename || 'smart_edit.mp4');
+      await assembleVideo(plan, planData.audioPath, finalOut, tmpDir, (p) => {
+        send({ phase: p.phase, percent: 70 + Math.round(p.percent * 0.3), detail: p.detail });
+      });
+
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+
+      return { success: true, outputPath: finalOut };
+    } catch (err) {
+      console.error('[SmartEditor] Export error:', err);
+      return { success: false, error: err.message };
+    }
+  });
 }
 
 module.exports = { register };

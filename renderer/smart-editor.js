@@ -381,83 +381,181 @@ Hub._seUpdateStepIndicators = function (currentPhase) {
   });
 };
 
-// ── Step 3: Timeline Review ──
+// ── Step 3: Visual Timeline Editor ──
+
+// Thumbnail cache + state
+if (!Hub.state.smartEditor._thumbCache) Hub.state.smartEditor._thumbCache = {};
+if (!Hub.state.smartEditor._expandedIdx) Hub.state.smartEditor._expandedIdx = null;
+if (!Hub.state.smartEditor._alts) Hub.state.smartEditor._alts = {};
+
 Hub._seRenderTimeline = function (panel) {
   const st = Hub.state.smartEditor;
   const planData = st.plan;
   const plan = planData?.plan || [];
+  const segments = planData?.segments || [];
   const r = st.result || {};
 
-  const stats = [];
   const clips = plan.filter(i => i.type === 'video_clip').length;
   const frames = plan.filter(i => i.type === 'still_frame').length;
   const totalDur = plan.length > 0 ? plan[plan.length - 1].endTime : 0;
-  if (clips) stats.push(`${clips} clips`);
-  if (frames) stats.push(`${frames} frames`);
-  stats.push(`${Hub.fmtDur(totalDur)}`);
 
   panel.innerHTML = `
     <div class="section-header">
       <h2>Smart Editor — Timeline</h2>
       <div style="display:flex;gap:8px;">
         <button class="btn btn-secondary" id="seBackBtn">${Hub.icons.back} Voltar</button>
-        <button class="btn btn-primary" id="seExportBtn">${Hub.icons.play} Exportar vídeo</button>
+        <button class="btn btn-primary" id="seExportBtn">${Hub.icons.play} Exportar</button>
       </div>
     </div>
     <div class="se-timeline-stats">
-      ${stats.join(' &middot; ')}
-      ${r.outputPath ? ` &middot; <span class="se-already-exported">Já exportado</span>` : ''}
+      ${clips} clips &middot; ${frames} frames &middot; ${Hub.fmtDur(totalDur)}
+      ${r.outputPath ? ' &middot; <span style="color:#4ade80">Exportado</span>' : ''}
     </div>
     <div class="se-timeline-scroll">
-      <div class="se-timeline" id="seTimeline">
-        ${plan.map((item, idx) => Hub._seRenderTimelineItem(item, idx)).join('')}
+      <div class="se-timeline-cards" id="seTimeline">
+        ${plan.map((item, idx) => Hub._seRenderCard(item, idx, segments)).join('')}
       </div>
     </div>
   `;
 
-  // Bind events
+  // Bind header buttons
   document.getElementById('seBackBtn')?.addEventListener('click', () => {
     st.step = 'setup';
     Hub.renderSmartEditor();
   });
+  document.getElementById('seExportBtn')?.addEventListener('click', () => Hub._seExportFromTimeline());
 
-  document.getElementById('seExportBtn')?.addEventListener('click', () => {
-    if (r.outputPath) {
-      // Already exported
-      Hub.showToast('Vídeo já exportado: ' + r.outputPath.split(/[\\/]/).pop());
+  // Bind card events
+  Hub._seBindCardEvents(panel, plan, segments);
+
+  // Load thumbnails lazily (first 10 immediately, rest on scroll)
+  Hub._seLoadVisibleThumbs(plan);
+};
+
+Hub._seRenderCard = function (item, idx, segments) {
+  const dur = (item.endTime - item.startTime).toFixed(1);
+  const isClip = item.type === 'video_clip';
+  const badge = isClip ? 'CLIP' : 'FRAME';
+  const badgeClass = isClip ? 'se-badge-clip' : 'se-badge-frame';
+  const effect = item.effect ? item.effect.replace('_', ' ') : '';
+
+  const sceneMin = Math.floor((item.sceneTime || 0) / 60);
+  const sceneSec = (item.sceneTime || 0) % 60;
+  const epTime = `${item.episode} @ ${sceneMin}:${String(sceneSec).padStart(2, '0')}`;
+
+  const startStr = Hub.fmtDur(item.startTime);
+  const endStr = Hub.fmtDur(item.endTime);
+
+  // Find voiceover text for this segment
+  const voSeg = segments.find(s => s.startTime <= item.startTime + 0.5 && s.endTime >= item.startTime - 0.5);
+  const voText = voSeg?.text || '';
+
+  const score = item._score || 0;
+  const desc = item._desc || '';
+
+  // Thumbnail
+  const thumbKey = `${item.episode}@${item.sceneTime}`;
+  const thumbSrc = Hub.state.smartEditor._thumbCache[thumbKey];
+  const thumbHtml = thumbSrc
+    ? `<img src="${thumbSrc}" alt="">`
+    : `<div class="se-card-thumb-loading">...</div>`;
+
+  const isExpanded = Hub.state.smartEditor._expandedIdx === idx;
+  const alts = Hub.state.smartEditor._alts[idx];
+
+  let altsHtml = '';
+  if (isExpanded) {
+    if (alts && alts.length > 0) {
+      altsHtml = `<div class="se-card-alts">
+        <div class="se-card-alts-label">Alternativas:</div>
+        <div class="se-card-alts-row">
+          ${alts.map((alt, ai) => `
+            <div class="se-card-alt" data-idx="${idx}" data-alt="${ai}" title="${Hub._escHtml(alt.desc)}">
+              <img src="${alt.thumbnail}" alt="">
+              <div class="se-card-alt-info">${alt.episode}@${Math.floor(alt.sceneTime/60)}:${String(alt.sceneTime%60).padStart(2,'0')}</div>
+              <div class="se-card-alt-score">${alt.score}pts</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+    } else if (alts === undefined) {
+      altsHtml = `<div class="se-card-alts"><div class="se-card-alts-label">A carregar alternativas...</div></div>`;
+    } else {
+      altsHtml = `<div class="se-card-alts"><div class="se-card-alts-label">Sem alternativas disponíveis</div></div>`;
+    }
+  }
+
+  return `
+    <div class="se-card ${isExpanded ? 'expanded' : ''}" data-idx="${idx}" draggable="true" data-thumb-key="${thumbKey}">
+      <div class="se-card-main">
+        <div class="se-card-thumb">${thumbHtml}</div>
+        <div class="se-card-info">
+          <div class="se-card-top">
+            <span class="se-card-badge ${badgeClass}">${badge}</span>
+            <span class="se-card-ep">${epTime}</span>
+            <span class="se-card-dur">${dur}s</span>
+            ${score > 0 ? `<span class="se-card-score">${score}pts</span>` : ''}
+          </div>
+          <div class="se-card-vo">${Hub._escHtml(voText) || '<em style="color:var(--text-dim)">(sem texto)</em>'}</div>
+          ${desc ? `<div class="se-card-desc">${Hub._escHtml(desc)}</div>` : ''}
+          <div class="se-card-time">${startStr} → ${endStr} ${effect ? `&middot; ${effect}` : ''}</div>
+        </div>
+        <div class="se-card-actions">
+          <button class="btn-icon se-card-swap-type" data-idx="${idx}" title="Trocar clip/frame">⇄</button>
+          <button class="btn-icon se-card-delete" data-idx="${idx}" title="Remover">✕</button>
+        </div>
+      </div>
+      ${altsHtml}
+    </div>
+  `;
+};
+
+Hub._seBindCardEvents = function (panel, plan, segments) {
+  const container = document.getElementById('seTimeline');
+  if (!container) return;
+  const st = Hub.state.smartEditor;
+
+  // Click to expand/collapse
+  container.addEventListener('click', async (e) => {
+    const card = e.target.closest('.se-card');
+    if (!card) return;
+    const idx = parseInt(card.dataset.idx);
+
+    // Handle alternative click
+    const altEl = e.target.closest('.se-card-alt');
+    if (altEl) {
+      const altIdx = parseInt(altEl.dataset.alt);
+      const alt = st._alts[idx]?.[altIdx];
+      if (alt) {
+        // Swap scene
+        const item = plan[idx];
+        const oldKey = `${item.episode}@${item.sceneTime}`;
+        item.episode = alt.episode;
+        item.sceneTime = alt.sceneTime;
+        item._score = alt.score;
+        item._desc = alt.desc;
+        // Cache new thumbnail
+        st._thumbCache[`${alt.episode}@${alt.sceneTime}`] = alt.thumbnail;
+        // Clear old alt
+        delete st._alts[idx];
+        st._expandedIdx = null;
+        Hub._seRenderTimeline(panel);
+        Hub.showToast('Cena trocada!');
+      }
       return;
     }
-    Hub._seExportFromTimeline();
-  });
 
-  // Drag & drop reorder
-  Hub._seBindTimelineDrag();
-
-  // Click to expand/collapse details
-  panel.querySelectorAll('.se-tl-item').forEach((el) => {
-    el.addEventListener('click', (e) => {
-      if (e.target.closest('.se-tl-delete') || e.target.closest('.se-tl-swap')) return;
-      el.classList.toggle('expanded');
-    });
-  });
-
-  // Delete buttons
-  panel.querySelectorAll('.se-tl-delete').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(btn.dataset.idx);
+    // Handle delete
+    if (e.target.closest('.se-card-delete')) {
       plan.splice(idx, 1);
-      // Recalculate times
       Hub._seRecalcTimes(plan);
+      st._expandedIdx = null;
       Hub._seRenderTimeline(panel);
-    });
-  });
+      return;
+    }
 
-  // Type swap buttons
-  panel.querySelectorAll('.se-tl-swap').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(btn.dataset.idx);
+    // Handle type swap
+    if (e.target.closest('.se-card-swap-type')) {
       const item = plan[idx];
       if (item.type === 'video_clip') {
         item.type = 'still_frame';
@@ -469,41 +567,98 @@ Hub._seRenderTimeline = function (panel) {
         delete item.effect;
       }
       Hub._seRenderTimeline(panel);
-    });
+      return;
+    }
+
+    // Toggle expand
+    if (st._expandedIdx === idx) {
+      st._expandedIdx = null;
+    } else {
+      st._expandedIdx = idx;
+      // Load alternatives if not cached
+      if (!st._alts[idx]) {
+        const item = plan[idx];
+        const voSeg = segments.find(s => s.startTime <= item.startTime + 0.5 && s.endTime >= item.startTime - 0.5);
+        Hub._seRenderTimeline(panel); // Show loading state
+
+        const result = await window.api.smartEditorGetAlternatives({
+          segmentText: voSeg?.text || '',
+          currentEpisode: item.episode,
+          currentTime: item.sceneTime,
+          seriesIds: st.seriesIds,
+          excludeIds: plan.map(p => `${p.episode}@${p.sceneTime}`),
+        });
+
+        st._alts[idx] = result?.success ? result.alternatives : [];
+      }
+    }
+    Hub._seRenderTimeline(panel);
+  });
+
+  // Drag & drop
+  let dragIdx = null;
+  container.addEventListener('dragstart', (e) => {
+    const card = e.target.closest('.se-card');
+    if (!card) return;
+    dragIdx = parseInt(card.dataset.idx);
+    card.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  container.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const t = e.target.closest('.se-card');
+    if (t) t.classList.add('drag-over');
+  });
+  container.addEventListener('dragleave', (e) => {
+    const t = e.target.closest('.se-card');
+    if (t) t.classList.remove('drag-over');
+  });
+  container.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const t = e.target.closest('.se-card');
+    if (!t || dragIdx === null) return;
+    const dropIdx = parseInt(t.dataset.idx);
+    if (dragIdx !== dropIdx) {
+      const [moved] = plan.splice(dragIdx, 1);
+      plan.splice(dropIdx, 0, moved);
+      Hub._seRecalcTimes(plan);
+      st._expandedIdx = null;
+      Hub._seRenderTimeline(panel);
+    }
+    dragIdx = null;
+  });
+  container.addEventListener('dragend', () => {
+    container.querySelectorAll('.dragging,.drag-over').forEach(el => el.classList.remove('dragging', 'drag-over'));
+    dragIdx = null;
   });
 };
 
-Hub._seRenderTimelineItem = function (item, idx) {
-  const dur = (item.endTime - item.startTime).toFixed(1);
-  const isClip = item.type === 'video_clip';
-  const badge = isClip ? 'clip' : 'frame';
-  const badgeClass = isClip ? 'se-badge-clip' : 'se-badge-frame';
-  const effectLabel = item.effect ? ` (${item.effect.replace('_', ' ')})` : '';
+// Load thumbnails lazily in batches
+Hub._seLoadVisibleThumbs = async function (plan) {
+  const st = Hub.state.smartEditor;
+  const BATCH = 4;
+  const toLoad = [];
 
-  const sceneMin = Math.floor(item.sceneTime / 60);
-  const sceneSec = item.sceneTime % 60;
-  const sceneTimeStr = `${sceneMin}:${String(sceneSec).padStart(2, '0')}`;
+  for (const item of plan) {
+    const key = `${item.episode}@${item.sceneTime}`;
+    if (!st._thumbCache[key]) toLoad.push({ key, episode: item.episode, sceneTime: item.sceneTime });
+  }
 
-  const startStr = Hub.fmtDur(item.startTime);
-  const endStr = Hub.fmtDur(item.endTime);
-
-  // Width proportional to duration (min 40px)
-  const widthPx = Math.max(40, Math.round((item.endTime - item.startTime) * 15));
-
-  return `
-    <div class="se-tl-item ${badgeClass}" data-idx="${idx}" style="min-width:${widthPx}px" draggable="true">
-      <div class="se-tl-header">
-        <span class="se-tl-badge ${badgeClass}">${badge}${effectLabel}</span>
-        <span class="se-tl-ep">${item.episode} @ ${sceneTimeStr}</span>
-        <span class="se-tl-dur">${dur}s</span>
-      </div>
-      <div class="se-tl-time">${startStr} → ${endStr}</div>
-      <div class="se-tl-actions">
-        <button class="btn-icon se-tl-swap" data-idx="${idx}" title="Trocar clip/frame">⇄</button>
-        <button class="btn-icon se-tl-delete" data-idx="${idx}" title="Remover">${Hub.icons.x}</button>
-      </div>
-    </div>
-  `;
+  for (let i = 0; i < toLoad.length; i += BATCH) {
+    const batch = toLoad.slice(i, i + BATCH);
+    await Promise.all(batch.map(async ({ key, episode, sceneTime }) => {
+      try {
+        const result = await window.api.smartEditorGetThumbnail({ episode, sceneTime, seriesIds: st.seriesIds });
+        if (result?.success) {
+          st._thumbCache[key] = result.data;
+          // Update the img directly without re-rendering
+          const el = document.querySelector(`[data-thumb-key="${key}"] .se-card-thumb`);
+          if (el) el.innerHTML = `<img src="${result.data}" alt="">`;
+        }
+      } catch (_) {}
+    }));
+  }
 };
 
 Hub._seRecalcTimes = function (plan) {

@@ -118,6 +118,8 @@ contextBridge.exposeInMainWorld('api', {
   smartEditorLoadPlan: (id) => ipcRenderer.invoke('smart-editor-load-plan', id),
   smartEditorListPlans: () => ipcRenderer.invoke('smart-editor-list-plans'),
   smartEditorExport: (opts) => ipcRenderer.invoke('smart-editor-export', opts),
+  smartEditorGetThumbnail: (opts) => ipcRenderer.invoke('smart-editor-get-thumbnail', opts),
+  smartEditorGetAlternatives: (opts) => ipcRenderer.invoke('smart-editor-get-alternatives', opts),
   onSmartEditorProgress: (cb) => ipcRenderer.on('smart-editor-progress', (_, d) => cb(d)),
 
   // ── Voiceover TTS (Elevate Labs) ──
