@@ -233,3 +233,118 @@
   gap: 10px;
   margin-top: 12px;
 }
+
+/* ── Timeline ── */
+.se-timeline-stats {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 8px 28px;
+  border-bottom: 1px solid var(--border);
+}
+.se-timeline-stats strong { color: var(--text); }
+.se-already-exported {
+  color: var(--green);
+  font-weight: 500;
+}
+
+.se-timeline-scroll {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: auto;
+  padding: 16px 28px;
+}
+
+.se-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.se-tl-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+  flex-shrink: 0;
+}
+.se-tl-item:hover {
+  border-color: var(--text-dim);
+}
+.se-tl-item.dragging {
+  opacity: 0.4;
+}
+.se-tl-item.drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.3);
+}
+
+.se-tl-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.se-tl-badge {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.se-badge-clip .se-tl-badge,
+.se-tl-badge.se-badge-clip {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+.se-badge-frame .se-tl-badge,
+.se-tl-badge.se-badge-frame {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.se-tl-ep {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.se-tl-dur {
+  color: var(--text-dim);
+  margin-left: auto;
+}
+
+.se-tl-time {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+
+.se-tl-actions {
+  display: none;
+  gap: 4px;
+  margin-top: 6px;
+}
+.se-tl-item.expanded .se-tl-actions,
+.se-tl-item:hover .se-tl-actions {
+  display: flex;
+}
+
+.se-tl-actions .btn-icon {
+  padding: 3px;
+  font-size: 12px;
+  border-radius: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.se-tl-actions .btn-icon:hover {
+  border-color: var(--text-dim);
+}
+.se-tl-actions .btn-icon svg {
+  width: 12px;
+  height: 12px;
+}

@@ -1,13 +1,14 @@
 window.Hub = window.Hub || {};
 
 Hub.state.smartEditor = {
-  step: 'setup',        // 'setup' | 'generating' | 'result'
+  step: 'setup',        // 'setup' | 'generating' | 'timeline' | 'result'
   scriptId: null,
   voiceoverPath: null,
   seriesIds: [],
   outputFolder: null,
   isGenerating: false,
-  result: null,         // {outputPath, segmentCount, clipCount, frameCount}
+  result: null,         // {outputPath, segmentCount, clipCount, frameCount, planId}
+  plan: null,           // editorial plan array for timeline view
 };
 
 Hub.renderSmartEditor = function () {
@@ -20,6 +21,8 @@ Hub.renderSmartEditor = function () {
     Hub._seRenderSetup(panel);
   } else if (st.step === 'generating') {
     Hub._seRenderGenerating(panel);
+  } else if (st.step === 'timeline') {
+    Hub._seRenderTimeline(panel);
   } else if (st.step === 'result') {
     Hub._seRenderResult(panel);
   }
@@ -305,9 +308,18 @@ Hub._seGenerate = async function () {
       setTimeout(() => bar.classList.remove('visible', 'done'), 4000);
 
       st.result = result;
-      st.step = 'result';
+
+      // Load the plan for timeline view
+      if (result.planId) {
+        try {
+          const planData = await window.api.smartEditorLoadPlan(result.planId);
+          if (planData.success) st.plan = planData.plan;
+        } catch (_) {}
+      }
+
+      st.step = 'timeline';
       Hub.renderSmartEditor();
-      Hub.showToast('Smart Editor concluído!');
+      Hub.showToast('Edição gerada! Revê a timeline.');
     } else {
       bar.classList.remove('visible');
       st.step = 'setup';
@@ -369,7 +381,236 @@ Hub._seUpdateStepIndicators = function (currentPhase) {
   });
 };
 
-// ── Step 3: Result ──
+// ── Step 3: Timeline Review ──
+Hub._seRenderTimeline = function (panel) {
+  const st = Hub.state.smartEditor;
+  const planData = st.plan;
+  const plan = planData?.plan || [];
+  const r = st.result || {};
+
+  const stats = [];
+  const clips = plan.filter(i => i.type === 'video_clip').length;
+  const frames = plan.filter(i => i.type === 'still_frame').length;
+  const totalDur = plan.length > 0 ? plan[plan.length - 1].endTime : 0;
+  if (clips) stats.push(`${clips} clips`);
+  if (frames) stats.push(`${frames} frames`);
+  stats.push(`${Hub.fmtDur(totalDur)}`);
+
+  panel.innerHTML = `
+    <div class="section-header">
+      <h2>Smart Editor — Timeline</h2>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary" id="seBackBtn">${Hub.icons.back} Voltar</button>
+        <button class="btn btn-primary" id="seExportBtn">${Hub.icons.play} Exportar vídeo</button>
+      </div>
+    </div>
+    <div class="se-timeline-stats">
+      ${stats.join(' &middot; ')}
+      ${r.outputPath ? ` &middot; <span class="se-already-exported">Já exportado</span>` : ''}
+    </div>
+    <div class="se-timeline-scroll">
+      <div class="se-timeline" id="seTimeline">
+        ${plan.map((item, idx) => Hub._seRenderTimelineItem(item, idx)).join('')}
+      </div>
+    </div>
+  `;
+
+  // Bind events
+  document.getElementById('seBackBtn')?.addEventListener('click', () => {
+    st.step = 'setup';
+    Hub.renderSmartEditor();
+  });
+
+  document.getElementById('seExportBtn')?.addEventListener('click', () => {
+    if (r.outputPath) {
+      // Already exported
+      Hub.showToast('Vídeo já exportado: ' + r.outputPath.split(/[\\/]/).pop());
+      return;
+    }
+    Hub._seExportFromTimeline();
+  });
+
+  // Drag & drop reorder
+  Hub._seBindTimelineDrag();
+
+  // Click to expand/collapse details
+  panel.querySelectorAll('.se-tl-item').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.se-tl-delete') || e.target.closest('.se-tl-swap')) return;
+      el.classList.toggle('expanded');
+    });
+  });
+
+  // Delete buttons
+  panel.querySelectorAll('.se-tl-delete').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.idx);
+      plan.splice(idx, 1);
+      // Recalculate times
+      Hub._seRecalcTimes(plan);
+      Hub._seRenderTimeline(panel);
+    });
+  });
+
+  // Type swap buttons
+  panel.querySelectorAll('.se-tl-swap').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.idx);
+      const item = plan[idx];
+      if (item.type === 'video_clip') {
+        item.type = 'still_frame';
+        item.effect = 'zoom_in';
+        delete item.clipDuration;
+      } else {
+        item.type = 'video_clip';
+        item.clipDuration = Math.min(5, item.endTime - item.startTime);
+        delete item.effect;
+      }
+      Hub._seRenderTimeline(panel);
+    });
+  });
+};
+
+Hub._seRenderTimelineItem = function (item, idx) {
+  const dur = (item.endTime - item.startTime).toFixed(1);
+  const isClip = item.type === 'video_clip';
+  const badge = isClip ? 'clip' : 'frame';
+  const badgeClass = isClip ? 'se-badge-clip' : 'se-badge-frame';
+  const effectLabel = item.effect ? ` (${item.effect.replace('_', ' ')})` : '';
+
+  const sceneMin = Math.floor(item.sceneTime / 60);
+  const sceneSec = item.sceneTime % 60;
+  const sceneTimeStr = `${sceneMin}:${String(sceneSec).padStart(2, '0')}`;
+
+  const startStr = Hub.fmtDur(item.startTime);
+  const endStr = Hub.fmtDur(item.endTime);
+
+  // Width proportional to duration (min 40px)
+  const widthPx = Math.max(40, Math.round((item.endTime - item.startTime) * 15));
+
+  return `
+    <div class="se-tl-item ${badgeClass}" data-idx="${idx}" style="min-width:${widthPx}px" draggable="true">
+      <div class="se-tl-header">
+        <span class="se-tl-badge ${badgeClass}">${badge}${effectLabel}</span>
+        <span class="se-tl-ep">${item.episode} @ ${sceneTimeStr}</span>
+        <span class="se-tl-dur">${dur}s</span>
+      </div>
+      <div class="se-tl-time">${startStr} → ${endStr}</div>
+      <div class="se-tl-actions">
+        <button class="btn-icon se-tl-swap" data-idx="${idx}" title="Trocar clip/frame">⇄</button>
+        <button class="btn-icon se-tl-delete" data-idx="${idx}" title="Remover">${Hub.icons.x}</button>
+      </div>
+    </div>
+  `;
+};
+
+Hub._seRecalcTimes = function (plan) {
+  let t = 0;
+  for (const item of plan) {
+    const dur = item.endTime - item.startTime;
+    item.startTime = t;
+    item.endTime = t + dur;
+    t += dur;
+  }
+};
+
+Hub._seBindTimelineDrag = function () {
+  const container = document.getElementById('seTimeline');
+  if (!container) return;
+
+  let dragIdx = null;
+
+  container.addEventListener('dragstart', (e) => {
+    const item = e.target.closest('.se-tl-item');
+    if (!item) return;
+    dragIdx = parseInt(item.dataset.idx);
+    item.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+
+  container.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const target = e.target.closest('.se-tl-item');
+    if (target) target.classList.add('drag-over');
+  });
+
+  container.addEventListener('dragleave', (e) => {
+    const target = e.target.closest('.se-tl-item');
+    if (target) target.classList.remove('drag-over');
+  });
+
+  container.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const target = e.target.closest('.se-tl-item');
+    if (!target || dragIdx === null) return;
+    const dropIdx = parseInt(target.dataset.idx);
+
+    if (dragIdx !== dropIdx) {
+      const st = Hub.state.smartEditor;
+      const plan = st.plan?.plan || [];
+      const [moved] = plan.splice(dragIdx, 1);
+      plan.splice(dropIdx, 0, moved);
+      Hub._seRecalcTimes(plan);
+      Hub._seRenderTimeline(document.getElementById('panel-smart-editor'));
+    }
+    dragIdx = null;
+  });
+
+  container.addEventListener('dragend', () => {
+    container.querySelectorAll('.dragging, .drag-over').forEach(el => {
+      el.classList.remove('dragging', 'drag-over');
+    });
+    dragIdx = null;
+  });
+};
+
+Hub._seExportFromTimeline = async function () {
+  const st = Hub.state.smartEditor;
+  if (!st.result?.planId) { Hub.showToast('Plano não encontrado', 'error'); return; }
+
+  // Save updated plan
+  await window.api.smartEditorSavePlan(st.plan);
+
+  const bar = document.getElementById('genBar');
+  const barPhase = document.getElementById('genBarPhase');
+  const barFill = document.getElementById('genBarFill');
+  const barPercent = document.getElementById('genBarPercent');
+
+  barPhase.textContent = 'A exportar...';
+  barFill.style.width = '0%';
+  barPercent.textContent = '0%';
+  bar.classList.remove('done');
+  bar.classList.add('visible');
+
+  window.api.onSmartEditorProgress((data) => {
+    barFill.style.width = `${data.percent || 0}%`;
+    barPercent.textContent = `${data.percent || 0}%`;
+    barPhase.textContent = data.detail || data.phase || 'A exportar...';
+  });
+
+  const result = await window.api.smartEditorExport({
+    planId: st.result.planId,
+    audioPath: st.voiceoverPath,
+    outputFolder: st.outputFolder || st.result.outputPath?.split(/[\\/]/).slice(0, -1).join('/'),
+    outputFilename: 'smart_edit.mp4',
+  });
+
+  bar.classList.remove('visible');
+
+  if (result.success) {
+    st.result.outputPath = result.outputPath;
+    st.step = 'result';
+    Hub.renderSmartEditor();
+    Hub.showToast('Vídeo exportado!');
+  } else {
+    Hub.showToast(`Erro: ${result.error}`, 'error');
+  }
+};
+
+// ── Step 4: Result ──
 Hub._seRenderResult = function (panel) {
   const st = Hub.state.smartEditor;
   const r = st.result || {};
