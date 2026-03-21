@@ -94,7 +94,8 @@ function buildSceneDatabase(series, maxPerEp = 3) {
 // ── AI Editorial Plan ──
 
 async function generateEditorialPlan(segments, sceneDb, seriesName, characters, settings, onProgress) {
-  const model = settings.model || 'claude-sonnet-4.5';
+  // Use gemini for planning — claude-sonnet-4.5 returns empty on large prompts via Elevate Labs
+  const model = 'gemini-2.5-pro';
   const apiKey = settings.elevateLabsApiKey;
 
   // Batch segments for long videos (max ~2 min of content per batch)
