@@ -543,11 +543,12 @@ async function extractStillFrame(episodePath, sceneTime, duration, effect, outpu
 
   // Ken Burns effect
   const frames = Math.round(duration * 30);
+  // Subtle zoom/pan — max 15% zoom, gentle pan
   const vfMap = {
-    zoom_in: `scale=2880:1620,zoompan=z='min(zoom+0.001,1.5)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`,
-    zoom_out: `scale=2880:1620,zoompan=z='if(eq(on\\,0)\\,1.5\\,max(zoom-0.001\\,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`,
-    pan_left: `scale=2400:1350,crop=1920:1080:'(iw-ow)*(1-t/${duration})':0`,
-    pan_right: `scale=2400:1350,crop=1920:1080:'(iw-ow)*t/${duration}':0`,
+    zoom_in: `scale=2160:1215,zoompan=z='min(zoom+0.0005,1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`,
+    zoom_out: `scale=2160:1215,zoompan=z='if(eq(on\\,0)\\,1.15\\,max(zoom-0.0005\\,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`,
+    pan_left: `scale=2112:1188,crop=1920:1080:'(iw-ow)*(1-t/${duration})':0`,
+    pan_right: `scale=2112:1188,crop=1920:1080:'(iw-ow)*t/${duration}':0`,
   };
 
   await runFfmpeg(ffmpegPath, [
@@ -620,7 +621,7 @@ async function extractAssets(plan, seriesData, tmpDir, onProgress) {
                   const holdFrames = Math.round(remaining * 30);
                   await runFfmpeg(ffmpegPath, [
                     '-y', '-loop', '1', '-i', lastFrame, '-t', String(remaining),
-                    '-vf', `scale=1920:1080,zoompan=z='min(zoom+0.001,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${holdFrames}:s=1920x1080:fps=30`,
+                    '-vf', `scale=2160:1215,zoompan=z='min(zoom+0.0003,1.1)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${holdFrames}:s=1920x1080:fps=30`,
                     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '30', '-an', extPath,
                   ], null, 60000);
 
