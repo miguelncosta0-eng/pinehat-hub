@@ -166,24 +166,32 @@ function scoreScene(scene, voText, mentionedChars, contextKeywords) {
   const descLow = scene.desc.toLowerCase();
 
   // ── CHARACTER MATCHING (highest weight) ──
+  // Trust DESCRIPTION TEXT over character tags (tags are often wrong from deep analysis)
   for (const char of mentionedChars) {
     const charParts = char.split(/\s+/);
-    // Scene has this character tagged
-    if (scene.chars.some(c => c === char || charParts.some(p => p.length > 2 && c.includes(p)))) {
-      score += 25;
-    }
-    // Character name appears in description
+
+    // Character name appears in DESCRIPTION (most reliable signal)
+    let inDesc = false;
     for (const part of charParts) {
-      if (part.length > 2 && descLow.includes(part)) score += 10;
+      if (part.length > 2 && descLow.includes(part)) {
+        score += 20; // high weight for description match
+        inDesc = true;
+      }
+    }
+
+    // Character tagged (less reliable — deep analysis sometimes tags wrong chars)
+    if (scene.chars.some(c => c === char || charParts.some(p => p.length > 2 && c.includes(p)))) {
+      score += inDesc ? 10 : 5; // only 5 if not confirmed by description
     }
   }
 
-  // Penalty: scene shows characters NOT mentioned (less relevant)
-  if (mentionedChars.length > 0 && scene.chars.length > 0) {
-    const anyMatch = scene.chars.some(c =>
-      mentionedChars.some(m => m.includes(c) || c.includes(m.split(' ')[0]))
-    );
-    if (!anyMatch) score -= 15; // strong penalty for wrong characters
+  // Penalty: if VO mentions specific characters, penalize scenes that DON'T mention them in description
+  if (mentionedChars.length > 0) {
+    const anyInDesc = mentionedChars.some(char => {
+      const parts = char.split(/\s+/);
+      return parts.some(p => p.length > 2 && descLow.includes(p));
+    });
+    if (!anyInDesc) score -= 10; // penalty for scenes without the mentioned character in description
   }
 
   // ── KEYWORD MATCHING ──
@@ -194,10 +202,31 @@ function scoreScene(scene, voText, mentionedChars, contextKeywords) {
   // ── CONTEXTUAL PATTERNS ──
   const voLow = voText.toLowerCase();
 
-  // Extra penalty: if voiceover talks about kids/fun/solving mysteries and scene shows villains
-  if (/kid|child|fun|play|mystery|solving|bond|heart|together/i.test(voLow)) {
-    if (scene.chars.some(c => /bill|cipher|gideon|ghost|monster|demon/i.test(c))) {
-      score -= 20; // don't show villains when talking about fun/kids
+  // Extra penalty: if voiceover talks about kids/fun/solving mysteries, penalize villain scenes
+  if (/kid|child|fun|play|solving|bond|heart|together|friend|brother|sister|love/i.test(voLow)) {
+    if (/bill cipher|triangle|pyramid|demon|menacing|ominous|evil|villain|gideon/i.test(descLow)) {
+      score -= 25; // don't show villains when talking about positive/fun things
+    }
+  }
+
+  // Bonus: if VO mentions "dream demon" or "Bill", boost scenes that DESCRIBE Bill visually
+  if (/bill cipher|dream demon|cipher|triangle demon/i.test(voLow)) {
+    if (/bill|cipher|triangle|pyramid|eye|yellow|one.?eye|floating/i.test(descLow)) {
+      score += 15; // boost Bill-looking scenes
+    }
+  }
+
+  // Bonus: if VO mentions "portal", boost scenes that DESCRIBE portal visually
+  if (/portal|gateway|dimension|other side/i.test(voLow)) {
+    if (/portal|gateway|glow|machine|vortex|dimension|rift|crack/i.test(descLow)) {
+      score += 15;
+    }
+  }
+
+  // Bonus: if VO mentions "journal", boost scenes with book/journal visuals
+  if (/journal|diário|diary/i.test(voLow)) {
+    if (/journal|book|diary|hand symbol|gold|red book|number 3|reading/i.test(descLow)) {
+      score += 15;
     }
   }
   // Objects & places
