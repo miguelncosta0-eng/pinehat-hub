@@ -222,6 +222,7 @@ Hub.renderSettings = async function () {
         <div class="settings-group-title">Atualizações</div>
         <div class="settings-field">
           <div style="display:flex;align-items:center;gap:12px;">
+            <span id="appVersionLabel" style="font-size:13px;font-weight:600;color:var(--text-dim);">v...</span>
             <button class="btn btn-secondary" id="checkUpdateBtn">Verificar Atualizações</button>
             <span id="updateStatus" style="font-size:12px;color:var(--text-dim);"></span>
           </div>
@@ -621,6 +622,12 @@ Hub.renderSettings = async function () {
       ttsSpeedVal.textContent = `${(parseFloat(ttsSpeedSlider.value) * 100).toFixed(0)}%`;
     });
   }
+
+  // Show current version
+  window.api.getAppVersion().then(v => {
+    const label = panel.querySelector('#appVersionLabel');
+    if (label) label.textContent = `v${v}`;
+  });
 
   // Check for updates
   panel.querySelector('#checkUpdateBtn').addEventListener('click', async () => {

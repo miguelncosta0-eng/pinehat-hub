@@ -37,6 +37,7 @@ function createWindow() {
   require('./main/ipc-smart-editor').register(mainWindow);
   require('./main/ipc-updater').register();
 
+  ipcMain.handle('get-app-version', () => app.getVersion());
 }
 
 app.whenReady().then(createWindow);

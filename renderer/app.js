@@ -171,22 +171,33 @@ Hub._initAutoUpdate = function () {
   });
 
   window.api.onUpdateDownloaded((data) => {
-    // Remove any existing update banner
-    const existing = document.querySelector('.update-banner');
-    if (existing) existing.remove();
+    Hub._showUpdateBanner(data.version);
+  });
+};
 
-    const container = document.getElementById('toastContainer');
-    const banner = document.createElement('div');
-    banner.className = 'update-banner';
-    banner.innerHTML = `
-      <span>Nova versão v${data.version} disponível</span>
-      <button class="btn btn-primary btn-small" id="installUpdateBtn">Instalar e Reiniciar</button>
-    `;
-    container.appendChild(banner);
+Hub._showUpdateBanner = function (version) {
+  // Remove any existing
+  const existing = document.querySelector('.update-banner');
+  if (existing) existing.remove();
 
-    banner.querySelector('#installUpdateBtn').addEventListener('click', () => {
-      window.api.installUpdate();
-    });
+  const banner = document.createElement('div');
+  banner.className = 'update-banner';
+  banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#7c3aed;color:#fff;padding:12px 24px;display:flex;align-items:center;justify-content:center;gap:16px;z-index:99999;font-weight:600;';
+  banner.innerHTML = `
+    <span>✨ Nova versão v${version} pronta a instalar</span>
+    <button id="installUpdateBtn" style="background:#fff;color:#7c3aed;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:700;">Instalar e Reiniciar</button>
+    <button id="dismissUpdateBtn" style="background:transparent;color:#fff;border:1px solid #fff;padding:8px 12px;border-radius:6px;cursor:pointer;">Mais tarde</button>
+  `;
+  document.body.appendChild(banner);
+
+  banner.querySelector('#installUpdateBtn').addEventListener('click', () => {
+    banner.querySelector('#installUpdateBtn').textContent = 'A instalar...';
+    window.api.installUpdate();
+  });
+
+  banner.querySelector('#dismissUpdateBtn').addEventListener('click', () => {
+    banner.remove();
+    Hub.showToast('A atualização será instalada quando fechares a app.', 'info');
   });
 };
 
