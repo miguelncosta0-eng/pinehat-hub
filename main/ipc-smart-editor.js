@@ -241,11 +241,15 @@ JSON ARRAY:`;
 
 // ── Validate and fix the editorial plan ──
 
-function validatePlan(plan, series) {
+function validatePlan(plan, series, audioDuration) {
   const episodes = {};
   for (const ep of (series.episodes || [])) {
     episodes[ep.code] = ep;
   }
+
+  const MIN_DURATION = 2;   // minimum 2 seconds per segment
+  const MAX_DURATION = 15;  // maximum 15 seconds per segment
+  const effects = ['zoom_in', 'zoom_out', 'pan_left', 'pan_right'];
 
   const valid = [];
   for (const item of plan) {
@@ -263,15 +267,93 @@ function validatePlan(plan, series) {
       item.clipDuration = Math.min(parseFloat(item.clipDuration) || 5, 5);
     }
     if (item.type === 'still_frame') {
-      item.effect = ['zoom_in', 'zoom_out', 'pan_left', 'pan_right'].includes(item.effect) ? item.effect : 'zoom_in';
+      item.effect = effects.includes(item.effect) ? item.effect : 'zoom_in';
     }
+
+    // Enforce minimum duration
+    let duration = item.endTime - item.startTime;
+    if (duration < MIN_DURATION) {
+      item.endTime = item.startTime + MIN_DURATION;
+      duration = MIN_DURATION;
+    }
+
+    // Enforce maximum duration — split into multiple segments
+    if (duration > MAX_DURATION) {
+      let t = item.startTime;
+      while (t < item.endTime) {
+        const segEnd = Math.min(t + MAX_DURATION, item.endTime);
+        const remaining = segEnd - t;
+        if (remaining < MIN_DURATION && valid.length > 0) break; // skip tiny leftover
+        valid.push({
+          ...item,
+          startTime: t,
+          endTime: segEnd,
+          type: valid.length % 3 === 0 ? 'video_clip' : 'still_frame',
+          effect: effects[valid.length % effects.length],
+          clipDuration: Math.min(5, segEnd - t),
+        });
+        t = segEnd;
+      }
+      continue; // already pushed split segments
+    }
+
     valid.push(item);
   }
 
   // Sort by startTime
   valid.sort((a, b) => a.startTime - b.startTime);
 
-  return valid;
+  // Fill gaps — if there's a gap > 0.5s between segments, add a still frame
+  const filled = [];
+  for (let i = 0; i < valid.length; i++) {
+    const item = valid[i];
+
+    if (filled.length > 0) {
+      const prev = filled[filled.length - 1];
+      const gap = item.startTime - prev.endTime;
+      if (gap > 0.5) {
+        // Fill gap with still frame from same or previous episode
+        filled.push({
+          startTime: prev.endTime,
+          endTime: item.startTime,
+          type: 'still_frame',
+          episode: prev.episode,
+          sceneTime: (prev.sceneTime || 0) + 10,
+          effect: effects[filled.length % effects.length],
+          clipDuration: 5,
+        });
+      }
+    }
+
+    filled.push(item);
+  }
+
+  // Fill end — if last segment ends before audio duration
+  if (audioDuration && filled.length > 0) {
+    const last = filled[filled.length - 1];
+    const remaining = audioDuration - last.endTime;
+    if (remaining > 1) {
+      // Split remaining into MAX_DURATION chunks
+      let t = last.endTime;
+      while (t < audioDuration) {
+        const segEnd = Math.min(t + MAX_DURATION, audioDuration);
+        if (segEnd - t < 1) break;
+        filled.push({
+          startTime: t,
+          endTime: segEnd,
+          type: 'still_frame',
+          episode: last.episode,
+          sceneTime: (last.sceneTime || 0) + Math.floor(Math.random() * 60),
+          effect: effects[filled.length % effects.length],
+          clipDuration: 5,
+        });
+        t = segEnd;
+      }
+    }
+  }
+
+  console.log(`[SmartEditor] Validated: ${plan.length} → ${filled.length} segments (min ${MIN_DURATION}s, max ${MAX_DURATION}s)`);
+  return filled;
 }
 
 // ── FFmpeg: Extract video clip ──
@@ -541,6 +623,13 @@ function register(mainWindow) {
 
       console.log(`[SmartEditor] Transcription: ${transcription.words.length} words`);
 
+      // Get audio duration for plan validation
+      let audioDuration = 0;
+      try {
+        audioDuration = await probeDuration(audioPath);
+        console.log(`[SmartEditor] Audio duration: ${audioDuration}s`);
+      } catch (_) {}
+
       // Step 2: Group into segments
       send({ phase: 'segmenting', percent: 20, detail: 'A agrupar em segmentos...' });
       const segments = groupWordsIntoSegments(transcription.words);
@@ -587,7 +676,7 @@ function register(mainWindow) {
 
       // Step 5: Validate
       send({ phase: 'validating', percent: 50, detail: 'A validar plano...' });
-      const validPlan = validatePlan(plan, combinedSeries);
+      const validPlan = validatePlan(plan, combinedSeries, audioDuration);
       console.log(`[SmartEditor] Valid plan: ${validPlan.length} items`);
 
       if (validPlan.length === 0) {
