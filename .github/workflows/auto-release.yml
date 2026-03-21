@@ -13,23 +13,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
-      - name: Get version from package.json
+      - name: Get current version
         id: pkg
-        run: echo "version=$(node -p 'require(\"./package.json\").version')" >> $GITHUB_OUTPUT
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $VERSION"
 
-      - name: Check if version changed
+      - name: Check if tag exists
         id: check
         run: |
-          PREV=$(git show HEAD~1:package.json 2>/dev/null | node -p 'JSON.parse(require("fs").readFileSync("/dev/stdin","utf8")).version' 2>/dev/null || echo "0.0.0")
-          CURR=${{ steps.pkg.outputs.version }}
-          if [ "$PREV" != "$CURR" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "Version changed: $PREV → $CURR"
-          else
+          VERSION=${{ steps.pkg.outputs.version }}
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "Version unchanged: $CURR"
+            echo "Tag v$VERSION already exists, skipping"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Tag v$VERSION does not exist, will build and release"
           fi
 
   build-windows:
@@ -45,11 +47,13 @@ jobs:
       - run: npm run build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: List dist
+        run: ls dist/
       - uses: actions/upload-artifact@v4
         with:
           name: win-build
           path: |
-            dist/*.exe
+            dist/Automated Setup *.exe
             dist/*.exe.blockmap
             dist/latest.yml
 
@@ -66,11 +70,13 @@ jobs:
       - run: npm run build:mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: List dist
+        run: ls dist/
       - uses: actions/upload-artifact@v4
         with:
           name: mac-build
           path: |
-            dist/*.dmg
+            dist/Automated-*.dmg
             dist/*.dmg.blockmap
             dist/latest-mac.yml
 
@@ -84,12 +90,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: win-build
-          path: dist-win
+          path: artifacts
 
       - uses: actions/download-artifact@v4
         with:
           name: mac-build
-          path: dist-mac
+          path: artifacts
+
+      - name: List all artifacts
+        run: find artifacts -type f | head -30
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -97,6 +106,4 @@ jobs:
           tag_name: v${{ needs.check-version.outputs.version }}
           name: v${{ needs.check-version.outputs.version }}
           body: "Auto-release v${{ needs.check-version.outputs.version }}"
-          files: |
-            dist-win/*
-            dist-mac/*
+          files: artifacts/**/*
