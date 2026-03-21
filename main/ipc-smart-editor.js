@@ -189,7 +189,7 @@ JSON ARRAY:`;
 
     if (!jsonStr) {
       console.error(`[SmartEditor] No JSON found in batch ${b + 1}. Full response:`, content);
-      throw new Error(`AI não devolveu JSON válido no batch ${b + 1}. Tenta novamente.`);
+      throw new Error(`AI não devolveu JSON válido no batch ${b + 1}. Resposta: "${content.slice(0, 200)}"`);
     }
 
     try {
@@ -514,7 +514,7 @@ function register(mainWindow) {
         return { success: false, error: 'Nenhum episódio analisado. Corre a Análise Profunda primeiro.' };
       }
 
-      console.log(`[SmartEditor] Scene DB: ${analyzedEps.length} episodes, ${seriesName}`);
+      console.log(`[SmartEditor] Scene DB: ${analyzedEps.length} episodes, ${seriesName}, DB size: ${combinedSceneDb.length} chars`);
 
       // Step 4: AI Editorial Plan
       const plan = await generateEditorialPlan(
