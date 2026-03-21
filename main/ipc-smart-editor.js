@@ -65,11 +65,77 @@ function groupWordsIntoSegments(words) {
 }
 
 // ── Build scene database for AI ──
+// Two-phase: full DB for search, compact per-batch for prompt
 
+function buildFullSceneDatabase(seriesList) {
+  const allScenes = [];
+  for (const series of seriesList) {
+    for (const ep of (series.episodes || [])) {
+      if (!ep.scenes || ep.scenes.length === 0) continue;
+      for (const scene of ep.scenes) {
+        if (!scene.description) continue;
+        allScenes.push({
+          episode: ep.code,
+          time: scene.time,
+          description: scene.description,
+          characters: scene.characters || [],
+          mood: scene.mood || 'unknown',
+        });
+      }
+    }
+  }
+  console.log(`[SmartEditor] Full scene DB: ${allScenes.length} scenes`);
+  return allScenes;
+}
+
+// For each batch, find the most relevant scenes based on voiceover text
+function findRelevantScenes(allScenes, batchText, maxScenes = 80) {
+  const textLower = batchText.toLowerCase();
+  const words = textLower.split(/\s+/).filter(w => w.length > 3);
+
+  // Score each scene by relevance to batch text
+  const scored = allScenes.map(scene => {
+    let score = 0;
+    const descLower = scene.description.toLowerCase();
+    const charNames = (scene.characters || []).map(c => c.toLowerCase());
+
+    // Character name matches (highest priority)
+    for (const charName of charNames) {
+      if (textLower.includes(charName)) score += 10;
+      // Also check first name only
+      const firstName = charName.split(' ')[0];
+      if (firstName.length > 2 && textLower.includes(firstName)) score += 8;
+    }
+
+    // Word overlap
+    for (const word of words) {
+      if (descLower.includes(word)) score += 2;
+    }
+
+    // Mood matching
+    if (scene.mood === 'action' && /luta|atac|corr|fug|explo/i.test(textLower)) score += 3;
+    if (scene.mood === 'dramatic' && /segredo|mistér|escur|perigo|mort/i.test(textLower)) score += 3;
+    if (scene.mood === 'dialogue' && /disse|fal|convers|explic/i.test(textLower)) score += 2;
+
+    return { ...scene, score };
+  });
+
+  // Sort by score descending, take top N
+  scored.sort((a, b) => b.score - a.score);
+  const relevant = scored.slice(0, maxScenes);
+
+  // Format for prompt
+  return relevant.map(s => {
+    const chars = s.characters?.length ? ` [${s.characters.join(',')}]` : '';
+    return `${s.episode}@${s.time}s${chars}: ${s.description.slice(0, 150)}`;
+  }).join('\n');
+}
+
+// Legacy compact format for small scene databases
 function buildSceneDatabase(series, maxPerEp = 3) {
   const lines = [];
   let totalScenes = 0;
-  const MAX_TOTAL = 40; // keep prompt small
+  const MAX_TOTAL = 40;
 
   for (const ep of (series.episodes || [])) {
     if (!ep.scenes || ep.scenes.length === 0) continue;
@@ -93,16 +159,14 @@ function buildSceneDatabase(series, maxPerEp = 3) {
 
 // ── AI Editorial Plan ──
 
-async function generateEditorialPlan(segments, sceneDb, seriesName, characters, settings, onProgress) {
-  // Use gemini for planning — claude-sonnet-4.5 returns empty on large prompts via Elevate Labs
-  const model = 'gemini-2.5-pro';
+async function generateEditorialPlan(segments, allScenes, seriesName, characters, settings, onProgress) {
   const apiKey = settings.elevateLabsApiKey;
 
   // Batch segments for long videos (max ~2 min of content per batch)
   const batches = [];
   let batch = [];
   let batchDuration = 0;
-  const MAX_BATCH_DURATION = 120; // 2 minutes per batch
+  const MAX_BATCH_DURATION = 120;
 
   for (const seg of segments) {
     const dur = seg.endTime - seg.startTime;
@@ -117,7 +181,7 @@ async function generateEditorialPlan(segments, sceneDb, seriesName, characters, 
   if (batch.length > 0) batches.push(batch);
 
   const allItems = [];
-  const charactersList = (characters || []).join(', ') || 'não especificados';
+  const charactersList = (characters || []).join(', ') || 'unknown';
 
   for (let b = 0; b < batches.length; b++) {
     if (cancelled) throw new Error('Cancelado');
@@ -129,32 +193,39 @@ async function generateEditorialPlan(segments, sceneDb, seriesName, characters, 
     });
 
     const batchSegs = batches[b];
-    const segList = batchSegs.map((s, i) => `${i}: [${s.startTime.toFixed(2)}s → ${s.endTime.toFixed(2)}s] "${s.text}"`).join('\n');
+    const batchText = batchSegs.map(s => s.text).join(' ');
+    const segList = batchSegs.map((s, i) => `${i}: [${s.startTime.toFixed(1)}s-${s.endTime.toFixed(1)}s] "${s.text}"`).join('\n');
+
+    // Find most relevant scenes for THIS batch's voiceover content
+    const relevantScenes = findRelevantScenes(allScenes, batchText, 80);
 
     // Include last 3 items from previous batch for continuity
     const prevContext = allItems.length > 0
-      ? `\nÚLTIMOS SEGMENTOS DO BATCH ANTERIOR (para continuidade):\n${JSON.stringify(allItems.slice(-3), null, 2)}\n`
+      ? `\nPREVIOUS (for continuity):\n${JSON.stringify(allItems.slice(-3))}\n`
       : '';
 
-    const prompt = `You are a YouTube video editor. Create a B-Roll edit plan for an essay about "${seriesName}".
-${charactersList !== 'não especificados' ? `Known characters: ${charactersList}` : ''}
+    const prompt = `You are an expert YouTube video editor creating B-Roll for an essay about "${seriesName}".
+Known characters: ${charactersList}
 
-VOICEOVER SEGMENTS:
+VOICEOVER (what is being said):
 ${segList}
 ${prevContext}
-AVAILABLE SCENES:
-${sceneDb}
+AVAILABLE SCENES (sorted by relevance to voiceover):
+${relevantScenes}
 
-Return ONLY a valid JSON array. Each item:
-{"startTime":NUMBER,"endTime":NUMBER,"type":"video_clip"|"still_frame","episode":"S01E01","sceneTime":NUMBER,"clipDuration":NUMBER,"effect":"zoom_in"|"zoom_out"|"pan_left"|"pan_right"}
+TASK: Pick the BEST scene for each moment based on what the voiceover is saying.
 
-CRITICAL RULES:
-1. CHARACTER MATCHING IS THE #1 PRIORITY: If the voiceover mentions a character (e.g. "Stan"), you MUST pick a scene where that character appears in the description. NEVER show a different character.
-2. If no scene matches the character mentioned, pick a generic scene from the same episode rather than showing the wrong character.
-3. video_clip: max 5 seconds. still_frame: Ken Burns effect.
-4. Cover entire voiceover duration with no gaps.
-5. Vary rhythm based on content tone.
-6. No two consecutive video clips from same episode timestamp range (180s apart minimum).
+Return ONLY a JSON array:
+[{"startTime":NUMBER,"endTime":NUMBER,"type":"video_clip"|"still_frame","episode":"S01E01","sceneTime":NUMBER,"clipDuration":NUMBER,"effect":"zoom_in"|"zoom_out"|"pan_left"|"pan_right"}]
+
+RULES:
+1. MATCH CONTENT: If voiceover says "Stan was hiding a secret", pick a scene showing Stan, NOT Dipper or Mabel.
+2. Use the scene descriptions to match characters and actions to what's being said.
+3. The format episode@time in the scenes list = episode code and sceneTime for your JSON.
+4. video_clip: max 5 seconds. still_frame: Ken Burns zoom/pan effect.
+5. Cover the ENTIRE voiceover duration from ${batchSegs[0].startTime.toFixed(1)}s to ${batchSegs[batchSegs.length - 1].endTime.toFixed(1)}s.
+6. Alternate between video_clip and still_frame for visual variety.
+7. Each segment should be 3-8 seconds long.
 
 JSON ARRAY:`;
 
@@ -646,13 +717,14 @@ function register(mainWindow) {
       let combinedSeries = { episodes: [], characters: [] };
       let seriesName = '';
 
+      const seriesToSearch = [];
       for (const sid of selectedIds) {
         const s = allSeries.find(x => x.id === sid);
         if (!s) continue;
         seriesName += (seriesName ? ' + ' : '') + s.name;
         combinedSeries.episodes.push(...(s.episodes || []));
         combinedSeries.characters.push(...(s.characters || []));
-        combinedSceneDb += `\n\n=== ${s.name} ===\n` + buildSceneDatabase(s);
+        seriesToSearch.push(s);
       }
 
       if (combinedSeries.episodes.length === 0) {
@@ -664,11 +736,13 @@ function register(mainWindow) {
         return { success: false, error: 'Nenhum episódio analisado. Corre a Análise Profunda primeiro.' };
       }
 
-      console.log(`[SmartEditor] Scene DB: ${analyzedEps.length} episodes, ${seriesName}, DB size: ${combinedSceneDb.length} chars`);
+      // Build full scene database for intelligent search
+      const allScenes = buildFullSceneDatabase(seriesToSearch);
+      console.log(`[SmartEditor] Full scene DB: ${allScenes.length} scenes from ${analyzedEps.length} episodes`);
 
-      // Step 4: AI Editorial Plan
+      // Step 4: AI Editorial Plan with intelligent scene matching
       const plan = await generateEditorialPlan(
-        segments, combinedSceneDb, seriesName, combinedSeries.characters, settings,
+        segments, allScenes, seriesName, combinedSeries.characters, settings,
         (p) => send({ phase: 'planning', percent: 25 + Math.round(p.percent * 0.25), detail: p.detail }),
       );
 
