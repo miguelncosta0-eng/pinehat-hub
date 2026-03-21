@@ -905,8 +905,17 @@ function register(mainWindow) {
         return { success: false, error: 'Plano editorial vazio após validação.' };
       }
 
-      // Save plan
+      // Save plan + debug log
       const planId = uuid();
+      const debugLog = path.join(SMART_DIR, `${planId}_debug.txt`);
+      const debugLines = validPlan.map((item, i) => {
+        const seg = segments.find(s => s.startTime <= item.startTime && s.endTime >= item.startTime);
+        const voText = seg ? seg.text.slice(0, 60) : '(gap filler)';
+        return `${i}: [${item.startTime.toFixed(1)}-${item.endTime.toFixed(1)}s] ${item.type} ${item.episode}@${item.sceneTime}s | VO: "${voText}"`;
+      });
+      fs.writeFileSync(debugLog, debugLines.join('\n'), 'utf8');
+      console.log(`[SmartEditor] Debug log saved: ${debugLog}`);
+
       writeJson(path.join(SMART_DIR, `${planId}.json`), {
         id: planId, seriesName, segments, plan: validPlan, audioPath,
         scriptText: scriptText?.slice(0, 500), createdAt: new Date().toISOString(),
