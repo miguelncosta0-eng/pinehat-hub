@@ -83,7 +83,7 @@ function buildSceneDatabase(series, maxPerEp = 3) {
     }
 
     if (picked.length === 0) continue;
-    lines.push(`${ep.code}: ${picked.map(s => `[${s.time}s]${s.description.slice(0, 50)}`).join(' | ')}`);
+    lines.push(`${ep.code}: ${picked.map(s => `[${s.time}s]${s.description.slice(0, 100)}`).join(' | ')}`);
     totalScenes += picked.length;
   }
   const result = lines.join('\n');
@@ -137,6 +137,7 @@ async function generateEditorialPlan(segments, sceneDb, seriesName, characters, 
       : '';
 
     const prompt = `You are a YouTube video editor. Create a B-Roll edit plan for an essay about "${seriesName}".
+${charactersList !== 'não especificados' ? `Known characters: ${charactersList}` : ''}
 
 VOICEOVER SEGMENTS:
 ${segList}
@@ -144,15 +145,16 @@ ${prevContext}
 AVAILABLE SCENES:
 ${sceneDb}
 
-OUTPUT FORMAT: Return ONLY a valid JSON array, no other text. Each item:
+Return ONLY a valid JSON array. Each item:
 {"startTime":NUMBER,"endTime":NUMBER,"type":"video_clip"|"still_frame","episode":"S01E01","sceneTime":NUMBER,"clipDuration":NUMBER,"effect":"zoom_in"|"zoom_out"|"pan_left"|"pan_right"}
 
-RULES:
-- Match visuals to narration content
-- video_clip: max 5 seconds, still_frame: uses Ken Burns effect
-- Cover entire voiceover duration, no gaps
-- Vary rhythm: action=multiple clips, analysis=clip+frame+clip, dramatic=long frame
-- No two consecutive clips from same timestamp range (180s apart minimum)
+CRITICAL RULES:
+1. CHARACTER MATCHING IS THE #1 PRIORITY: If the voiceover mentions a character (e.g. "Stan"), you MUST pick a scene where that character appears in the description. NEVER show a different character.
+2. If no scene matches the character mentioned, pick a generic scene from the same episode rather than showing the wrong character.
+3. video_clip: max 5 seconds. still_frame: Ken Burns effect.
+4. Cover entire voiceover duration with no gaps.
+5. Vary rhythm based on content tone.
+6. No two consecutive video clips from same episode timestamp range (180s apart minimum).
 
 JSON ARRAY:`;
 
