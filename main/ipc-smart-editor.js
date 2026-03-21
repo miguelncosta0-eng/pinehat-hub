@@ -177,7 +177,7 @@ JSON ARRAY:`;
       body: JSON.stringify({
         model: planModel,
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 4000,
+        max_tokens: 8000,
         temperature: 0.2,
       }),
     });
@@ -436,12 +436,34 @@ async function assembleVideo(plan, audioPath, outputPath, tmpDir, onProgress) {
 
   onProgress({ phase: 'assembling', percent: 0, detail: 'A juntar segmentos...' });
 
-  // Write concat file
+  // Write concat file — fill gaps with black frames for missing segments
   const concatFile = path.join(tmpDir, 'concat_final.txt');
-  const lines = plan
-    .filter(item => item._outputPath && fs.existsSync(item._outputPath))
-    .map(item => `file '${item._outputPath.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`);
+  const lines = [];
+  let missingCount = 0;
 
+  for (let i = 0; i < plan.length; i++) {
+    const item = plan[i];
+    if (item._outputPath && fs.existsSync(item._outputPath)) {
+      lines.push(`file '${item._outputPath.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`);
+    } else {
+      // Create black frame for missing segment
+      missingCount++;
+      const dur = item.endTime - item.startTime;
+      const blackPath = path.join(tmpDir, `black_${String(i).padStart(5, '0')}.mp4`);
+      try {
+        await runFfmpeg(ffmpegPath, [
+          '-y', '-f', 'lavfi', '-i', `color=c=black:s=1920x1080:d=${dur}:r=30`,
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an',
+          blackPath,
+        ], null, 15000);
+        lines.push(`file '${blackPath.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`);
+      } catch (_) {
+        console.warn(`[SmartEditor] Failed to create black frame for segment ${i}`);
+      }
+    }
+  }
+
+  console.log(`[SmartEditor] Assembly: ${lines.length} segments (${missingCount} missing → black frames)`);
   if (lines.length === 0) throw new Error('Nenhum segmento extraído com sucesso');
 
   fs.writeFileSync(concatFile, lines.join('\n'));
@@ -461,7 +483,7 @@ async function assembleVideo(plan, audioPath, outputPath, tmpDir, onProgress) {
     '-y', '-i', concatOutput, '-i', audioPath,
     '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
     '-map', '0:v:0', '-map', '1:a:0',
-    '-shortest', '-movflags', '+faststart',
+    '-movflags', '+faststart',
     outputPath,
   ], null, 300000);
 
