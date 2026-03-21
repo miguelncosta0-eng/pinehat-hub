@@ -94,12 +94,23 @@ Hub._renderSeriesDetail = async function (panel, seriesId) {
         <button class="btn btn-primary btn-small" id="seriesAnalyzeAllBtn" ${analyzing ? 'disabled' : ''}>
           ${analyzing ? '<span class="spinner"></span> A analisar...' : '🤖 Analisar Todos'}
         </button>
+        <button class="btn btn-primary btn-small" id="seriesDeepAnalyzeBtn" ${analyzing ? 'disabled' : ''} style="background:#059669;">
+          ${analyzing ? '<span class="spinner"></span> A analisar...' : '🔬 Análise Profunda'}
+        </button>
       </div>
     </div>
 
     <div class="series-detail-info">
       <span>${series.episodes.length} episódios · ${analyzedCount} analisados</span>
       <span class="series-folder-path">${Hub._escHtml(series.folderPath)}</span>
+    </div>
+
+    <div class="series-characters-row">
+      <label class="form-label">Personagens (para análise profunda)</label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input class="input" id="seriesCharactersInput" type="text" placeholder="Ex: Dipper, Mabel, Stan, Wendy" value="${Hub._escHtml((series.characters || []).join(', '))}" style="flex:1;max-width:400px;">
+        <button class="btn btn-secondary btn-small" id="seriesSaveCharacters">Guardar</button>
+      </div>
     </div>
 
     ${analyzing ? `
@@ -143,6 +154,17 @@ Hub._renderSeriesDetail = async function (panel, seriesId) {
 
   panel.querySelector('#seriesAnalyzeAllBtn')?.addEventListener('click', () => {
     Hub._seriesAnalyzeAll(seriesId, series.episodes.filter(ep => !ep.analyzed));
+  });
+
+  panel.querySelector('#seriesDeepAnalyzeBtn')?.addEventListener('click', () => {
+    Hub._seriesDeepAnalyzeAll(seriesId, series.episodes.filter(ep => !ep.deepAnalyzed));
+  });
+
+  panel.querySelector('#seriesSaveCharacters')?.addEventListener('click', async () => {
+    const input = document.getElementById('seriesCharactersInput');
+    const chars = input.value.split(',').map(c => c.trim()).filter(Boolean);
+    await window.api.seriesUpdateCharacters({ seriesId, characters: chars });
+    Hub.showToast(`${chars.length} personagens guardados`);
   });
 
   panel.querySelector('#seriesCancelBtn')?.addEventListener('click', async () => {
@@ -227,6 +249,41 @@ Hub._seriesAnalyzeNext = async function (seriesId) {
 
   // Always continue to next episode regardless of error
   Hub._seriesAnalyzeNext(seriesId);
+};
+
+Hub._seriesDeepAnalyzeAll = async function (seriesId, episodes) {
+  if (Hub._seriesCurrentAnalysis) return;
+  const toAnalyze = episodes.filter(ep => !ep.deepAnalyzed);
+  if (toAnalyze.length === 0) { Hub.showToast('Todos os episódios já têm análise profunda'); return; }
+
+  Hub._seriesAnalysisQueue = [...toAnalyze];
+  Hub._seriesDeepMode = true;
+  await Hub._seriesDeepAnalyzeNext(seriesId);
+};
+
+Hub._seriesDeepAnalyzeNext = async function (seriesId) {
+  if (Hub._seriesAnalysisQueue.length === 0) {
+    Hub._seriesCurrentAnalysis = null;
+    Hub._seriesDeepMode = false;
+    Hub.showToast('Análise profunda concluída!');
+    Hub.renderSeries();
+    return;
+  }
+
+  const ep = Hub._seriesAnalysisQueue.shift();
+  Hub._seriesCurrentAnalysis = { seriesId, code: ep.code };
+  Hub.renderSeries();
+
+  try {
+    const result = await window.api.seriesDeepAnalyze({ seriesId, episodeCode: ep.code });
+    if (!result.success) {
+      console.warn(`Erro deep analysis ${ep.code}: ${result.error}`);
+    }
+  } catch (err) {
+    console.warn(`Exceção deep analysis ${ep.code}:`, err);
+  }
+
+  Hub._seriesDeepAnalyzeNext(seriesId);
 };
 
 Hub._seriesAnalysisProgress = function (data) {

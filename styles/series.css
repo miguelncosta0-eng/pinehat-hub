@@ -39,8 +39,21 @@
   gap: 16px;
   font-size: 13px;
   color: var(--text-dim);
+  margin-bottom: 8px;
+  padding: 0 2px;
+}
+
+.series-characters-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin-bottom: 16px;
   padding: 0 2px;
+}
+.series-characters-row .form-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 0;
 }
 .series-folder-path {
   font-size: 11px;
