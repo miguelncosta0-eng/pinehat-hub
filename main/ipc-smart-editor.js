@@ -349,16 +349,166 @@ function buildEpisodeContext(episodeSummaries, relevantEpisodes) {
   return lines.join('\n');
 }
 
-// ── Direct Scene Assignment — no AI needed for scene selection ──
-// The scoring system already picks the right scenes. The AI was the bottleneck.
+// ═══════════════════════════════════════════════════════════
+// EMBEDDINGS — semantic matching via OpenAI
+// ═══════════════════════════════════════════════════════════
 
-function generateEditorialPlan(segments, sceneDB, seriesName, characters, settings, onProgress) {
+async function generateEmbeddings(texts, openaiKey) {
+  const BATCH = 100;
+  const allEmbeddings = [];
+
+  for (let i = 0; i < texts.length; i += BATCH) {
+    const batch = texts.slice(i, i + BATCH);
+    const resp = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openaiKey}` },
+      body: JSON.stringify({ model: 'text-embedding-3-small', input: batch }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(`Embeddings API error ${resp.status}: ${err.slice(0, 200)}`);
+    }
+
+    const data = await resp.json();
+    for (const item of data.data) {
+      allEmbeddings.push(item.embedding);
+    }
+
+    // Small delay between batches
+    if (i + BATCH < texts.length) await new Promise(r => setTimeout(r, 200));
+  }
+
+  return allEmbeddings;
+}
+
+function cosineSimilarity(a, b) {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-10);
+}
+
+// Cache embeddings to avoid re-computing
+const EMBEDDINGS_CACHE = path.join(DATA_DIR, 'smart-editor', 'embeddings_cache.json');
+
+async function getSceneEmbeddings(scenes, openaiKey, onProgress) {
+  // Check cache
+  let cache = {};
+  try {
+    if (fs.existsSync(EMBEDDINGS_CACHE)) {
+      cache = JSON.parse(fs.readFileSync(EMBEDDINGS_CACHE, 'utf8'));
+    }
+  } catch (_) { cache = {}; }
+
+  // Find scenes that need embeddings
+  const needEmbedding = [];
+  const needIdx = [];
+  for (let i = 0; i < scenes.length; i++) {
+    if (!cache[scenes[i].id]) {
+      needEmbedding.push(scenes[i].desc.slice(0, 200));
+      needIdx.push(i);
+    }
+  }
+
+  console.log(`[SmartEditor] Embeddings: ${scenes.length} scenes, ${needEmbedding.length} need computing, ${scenes.length - needEmbedding.length} cached`);
+
+  if (needEmbedding.length > 0) {
+    onProgress({ phase: 'embeddings', percent: 0, detail: `A gerar embeddings para ${needEmbedding.length} cenas...` });
+
+    const newEmbeddings = await generateEmbeddings(needEmbedding, openaiKey);
+
+    for (let i = 0; i < needIdx.length; i++) {
+      cache[scenes[needIdx[i]].id] = newEmbeddings[i];
+    }
+
+    // Save cache
+    try {
+      ensureSmartDir();
+      fs.writeFileSync(EMBEDDINGS_CACHE, JSON.stringify(cache));
+    } catch (e) {
+      console.error('[SmartEditor] Failed to save embeddings cache:', e.message);
+    }
+
+    onProgress({ phase: 'embeddings', percent: 100, detail: 'Embeddings prontos!' });
+  }
+
+  return cache;
+}
+
+function findBestScenesByEmbedding(scenes, embeddingsCache, queryEmbedding, usedSceneIds, maxScenes = 30) {
+  const scored = [];
+
+  for (const scene of scenes) {
+    if (usedSceneIds.has(scene.id)) continue;
+    if (!scene.desc || scene.desc.length < 10) continue;
+
+    const sceneEmb = embeddingsCache[scene.id];
+    if (!sceneEmb) continue;
+
+    const similarity = cosineSimilarity(queryEmbedding, sceneEmb);
+    scored.push({ ...scene, score: Math.round(similarity * 100) });
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+
+  // Diversify by episode
+  const perEp = {};
+  const result = [];
+  for (const scene of scored) {
+    if (result.length >= maxScenes) break;
+    const epCount = perEp[scene.episode] || 0;
+    if (epCount >= 10) continue;
+    perEp[scene.episode] = epCount + 1;
+    result.push(scene);
+  }
+
+  return result;
+}
+
+// ── Direct Scene Assignment — uses embeddings when available ──
+
+async function generateEditorialPlan(segments, sceneDB, seriesName, characters, settings, onProgress) {
   const charAliases = buildCharAliases(characters);
   const usedSceneIds = new Set();
   const allItems = [];
   const effects = ['zoom_in', 'zoom_out', 'pan_left', 'pan_right'];
 
-  console.log(`[SmartEditor] Direct planning for ${segments.length} segments`);
+  // Try to use embeddings if OpenAI key available
+  let embeddingsCache = null;
+  let segmentEmbeddings = null;
+  const openaiKey = settings.openaiApiKey;
+
+  if (openaiKey) {
+    try {
+      onProgress({ phase: 'embeddings', percent: 0, detail: 'A gerar embeddings das cenas...' });
+
+      // Generate scene embeddings (cached)
+      embeddingsCache = await getSceneEmbeddings(sceneDB.scenes, openaiKey, onProgress);
+
+      // Generate embeddings for voiceover segments
+      const segTexts = segments.map(s => s.text.slice(0, 200));
+      onProgress({ phase: 'embeddings', percent: 50, detail: 'A gerar embeddings do voiceover...' });
+      const segEmbs = await generateEmbeddings(segTexts, openaiKey);
+      segmentEmbeddings = {};
+      for (let i = 0; i < segments.length; i++) {
+        segmentEmbeddings[i] = segEmbs[i];
+      }
+
+      console.log(`[SmartEditor] Embeddings ready: ${Object.keys(embeddingsCache).length} scenes, ${segments.length} segments`);
+      onProgress({ phase: 'embeddings', percent: 100, detail: 'Embeddings prontos!' });
+    } catch (err) {
+      console.error(`[SmartEditor] Embeddings failed, falling back to text matching: ${err.message}`);
+      embeddingsCache = null;
+      segmentEmbeddings = null;
+    }
+  }
+
+  const useEmbeddings = embeddingsCache && segmentEmbeddings;
+  console.log(`[SmartEditor] Planning for ${segments.length} segments (embeddings: ${useEmbeddings ? 'YES' : 'NO'})`);
 
   for (let i = 0; i < segments.length; i++) {
     if (cancelled) throw new Error('Cancelado');
@@ -373,17 +523,22 @@ function generateEditorialPlan(segments, sceneDB, seriesName, characters, settin
       detail: `A planear segmento ${i + 1}/${segments.length}...`,
     });
 
-    // Find best scenes for THIS specific segment
-    const bestScenes = findBestScenes(
-      sceneDB.scenes, sceneDB.episodeSummaries,
-      seg.text, charAliases, usedSceneIds, 30
-    );
+    // Find best scenes — use embeddings if available, text matching as fallback
+    let bestScenes;
+    if (useEmbeddings) {
+      bestScenes = findBestScenesByEmbedding(
+        sceneDB.scenes, embeddingsCache, segmentEmbeddings[i], usedSceneIds, 30
+      );
+    } else {
+      bestScenes = findBestScenes(
+        sceneDB.scenes, sceneDB.episodeSummaries,
+        seg.text, charAliases, usedSceneIds, 30
+      );
+    }
 
     if (bestScenes.length === 0) continue;
 
-    // Decide how many sub-segments to create for this voiceover segment
-    // Keep clips longer — min 4s each so they don't flash by too fast
-    // Short segments (< 5s): 1 clip. Medium (5-10s): 2 clips. Long (> 10s): 3+ clips.
+    // Decide how many sub-segments
     let subCount;
     if (segDuration < 5) subCount = 1;
     else if (segDuration < 10) subCount = 2;
@@ -398,9 +553,6 @@ function generateEditorialPlan(segments, sceneDB, seriesName, characters, settin
       const dur = subEnd - t;
       if (dur < 1) break;
 
-      // Alternate video_clip and still_frame
-      // First sub-segment: video (shows the action)
-      // Subsequent: alternate still/video
       const isVideo = j === 0 || j % 3 === 0;
 
       allItems.push({
@@ -420,7 +572,7 @@ function generateEditorialPlan(segments, sceneDB, seriesName, characters, settin
     }
   }
 
-  console.log(`[SmartEditor] Direct plan: ${allItems.length} items from ${segments.length} segments`);
+  console.log(`[SmartEditor] Plan: ${allItems.length} items from ${segments.length} segments`);
   return allItems;
 }
 
@@ -834,10 +986,10 @@ function register(mainWindow) {
 
       const sceneDB = buildSceneDB(seriesToSearch);
 
-      // Step 4: Direct Plan (no AI needed — scoring assigns scenes directly)
-      const plan = generateEditorialPlan(
+      // Step 4: Plan with embeddings (semantic matching) or text scoring fallback
+      const plan = await generateEditorialPlan(
         segments, sceneDB, seriesName, combined.characters, settings,
-        (p) => send({ phase: 'planning', percent: 20 + Math.round(p.percent * 0.30), detail: p.detail }),
+        (p) => send({ phase: p.phase || 'planning', percent: 20 + Math.round((p.percent || 0) * 0.30), detail: p.detail }),
       );
       console.log(`[SmartEditor] Raw plan: ${plan.length} items`);
 
