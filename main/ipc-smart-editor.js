@@ -66,17 +66,31 @@ function groupWordsIntoSegments(words) {
 
 // ── Build scene database for AI ──
 
-function buildSceneDatabase(series, maxPerEp = 10) {
+function buildSceneDatabase(series, maxPerEp = 5) {
   const lines = [];
+  let totalScenes = 0;
+  const MAX_TOTAL = 100; // max 100 scenes total across all episodes
+
   for (const ep of (series.episodes || [])) {
     if (!ep.scenes || ep.scenes.length === 0) continue;
+    if (totalScenes >= MAX_TOTAL) break;
+
+    // Pick evenly spaced scenes for variety
+    const validScenes = ep.scenes.filter(s => s.description);
+    const step = Math.max(1, Math.floor(validScenes.length / maxPerEp));
+    const picked = [];
+    for (let i = 0; i < validScenes.length && picked.length < maxPerEp; i += step) {
+      picked.push(validScenes[i]);
+    }
+
+    if (picked.length === 0) continue;
     lines.push(`${ep.code}:`);
-    // Limit scenes per episode to keep prompt manageable
-    const scenes = ep.scenes.filter(s => s.description).slice(0, maxPerEp);
-    for (const scene of scenes) {
-      lines.push(`  [${scene.time}s]: ${scene.description.slice(0, 120)}`);
+    for (const scene of picked) {
+      lines.push(`  [${scene.time}s]: ${scene.description.slice(0, 80)}`);
+      totalScenes++;
     }
   }
+  console.log(`[SmartEditor] Scene DB: ${totalScenes} scenes, ${lines.join('\n').length} chars`);
   return lines.join('\n');
 }
 
