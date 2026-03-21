@@ -24,12 +24,21 @@ exports.register = function () {
     sendToRenderer('update-downloaded', { version: info.version });
   });
 
+  autoUpdater.on('download-progress', (progress) => {
+    console.log(`[updater] Download: ${Math.round(progress.percent)}%`);
+    sendToRenderer('update-download-progress', { percent: Math.round(progress.percent) });
+  });
+
   autoUpdater.on('error', (err) => {
     console.log('[updater] Error:', err.message);
+    sendToRenderer('update-error', { message: err.message });
   });
 
   ipcMain.handle('install-update', () => {
-    autoUpdater.quitAndInstall(false, true);
+    // Force quit all windows, then install
+    setImmediate(() => {
+      autoUpdater.quitAndInstall(true, true);
+    });
   });
 
   ipcMain.handle('check-for-updates', () => {
