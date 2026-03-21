@@ -66,17 +66,15 @@ function groupWordsIntoSegments(words) {
 
 // ── Build scene database for AI ──
 
-function buildSceneDatabase(series) {
+function buildSceneDatabase(series, maxPerEp = 10) {
   const lines = [];
   for (const ep of (series.episodes || [])) {
     if (!ep.scenes || ep.scenes.length === 0) continue;
-    lines.push(`\n${ep.code}:`);
-    for (const scene of ep.scenes) {
-      const mins = Math.floor(scene.time / 60);
-      const secs = scene.time % 60;
-      const timeStr = `${mins}:${String(secs).padStart(2, '0')}`;
-      const desc = scene.description || 'No description';
-      lines.push(`  [${scene.time}s / ${timeStr}]: ${desc}`);
+    lines.push(`${ep.code}:`);
+    // Limit scenes per episode to keep prompt manageable
+    const scenes = ep.scenes.filter(s => s.description).slice(0, maxPerEp);
+    for (const scene of scenes) {
+      lines.push(`  [${scene.time}s]: ${scene.description.slice(0, 120)}`);
     }
   }
   return lines.join('\n');
@@ -126,41 +124,25 @@ async function generateEditorialPlan(segments, sceneDb, seriesName, characters, 
       ? `\nÚLTIMOS SEGMENTOS DO BATCH ANTERIOR (para continuidade):\n${JSON.stringify(allItems.slice(-3), null, 2)}\n`
       : '';
 
-    const prompt = `És um editor de vídeo profissional do YouTube. Estás a criar o B-Roll para um vídeo ensaio sobre "${seriesName}".
-Personagens conhecidos: ${charactersList}
+    const prompt = `You are a YouTube video editor. Create a B-Roll edit plan for an essay about "${seriesName}".
 
-SEGMENTOS DO VOICEOVER (com timestamps do áudio):
+VOICEOVER SEGMENTS:
 ${segList}
 ${prevContext}
-BASE DE DADOS DE CENAS DISPONÍVEIS:
+AVAILABLE SCENES:
 ${sceneDb}
 
-TAREFA:
-Cria um plano editorial — um JSON array de segmentos visuais que cobrem toda a duração do voiceover.
-Cada segmento é "video_clip" (máx 5 seg de vídeo) ou "still_frame" (frame parada com efeito Ken Burns).
+OUTPUT FORMAT: Return ONLY a valid JSON array, no other text. Each item:
+{"startTime":NUMBER,"endTime":NUMBER,"type":"video_clip"|"still_frame","episode":"S01E01","sceneTime":NUMBER,"clipDuration":NUMBER,"effect":"zoom_in"|"zoom_out"|"pan_left"|"pan_right"}
 
-REGRAS EDITORIAIS:
-1. Os visuais devem corresponder ao conteúdo da narração — quando menciona um personagem ou evento, mostra footage relevante
-2. Varia o ritmo baseado no conteúdo:
-   - Discussão de ação rápida → vários clips curtos seguidos
-   - Análise/explicação → clip + frame parada com zoom + clip
-   - Momento dramático → frame parada longa com zoom lento
-   - Podes meter 2-3 clips seguidos se fizer sentido
-3. Segurança de copyright:
-   - Video clips: máximo 5 segundos cada
-   - Nunca usar dois clips consecutivos do mesmo range de tempo (mínimo 180 seg de distância na fonte)
-   - Não mais que 3 clips do mesmo episódio seguidos
-   - Frames paradas não têm restrições de copyright
-4. Cobrir TODA a duração do voiceover sem gaps
-5. Frames paradas devem usar efeitos: "zoom_in", "zoom_out", "pan_left", "pan_right"
-6. As frames paradas também devem ser RELEVANTES ao que está a ser dito, não aleatórias
-7. Escolhe cenas que sejam CONTEXTUALMENTE relevantes ao que está a ser dito
+RULES:
+- Match visuals to narration content
+- video_clip: max 5 seconds, still_frame: uses Ken Burns effect
+- Cover entire voiceover duration, no gaps
+- Vary rhythm: action=multiple clips, analysis=clip+frame+clip, dramatic=long frame
+- No two consecutive clips from same timestamp range (180s apart minimum)
 
-Devolve APENAS um JSON array (sem texto extra):
-[
-  {"startTime": 0.0, "endTime": 5.2, "type": "video_clip", "episode": "S01E01", "sceneTime": 842, "clipDuration": 5},
-  {"startTime": 5.2, "endTime": 12.0, "type": "still_frame", "episode": "S01E03", "sceneTime": 1200, "effect": "zoom_in"}
-]`;
+JSON ARRAY:`;
 
     const response = await fetch(`${CHAT_BASE}/chat/completions`, {
       method: 'POST',
