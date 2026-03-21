@@ -2011,7 +2011,8 @@ function register(mainWindow) {
       const result = await generateTTS(settings.elevateLabsApiKey, text.trim(), vid, ttsOpts);
 
       if (!result.success || !result.resultUrl) {
-        return { success: false, error: 'Falha na geração do áudio.' };
+        const errDetail = typeof result.error === 'string' ? result.error : (result.error?.message || JSON.stringify(result.error || 'Falha na geração do áudio.'));
+        return { success: false, error: errDetail };
       }
 
       event.sender.send('voiceover-tts-progress', { phase: 'downloading', percent: 70 });
@@ -2032,7 +2033,11 @@ function register(mainWindow) {
       return { success: true, outputPath };
     } catch (err) {
       console.error('[TTS] Error:', err);
-      const msg = typeof err === 'string' ? err : (err?.message || JSON.stringify(err));
+      let msg;
+      if (typeof err === 'string') msg = err;
+      else if (err instanceof Error) msg = err.message;
+      else if (typeof err === 'object') msg = JSON.stringify(err);
+      else msg = String(err);
       return { success: false, error: msg };
     }
   });
