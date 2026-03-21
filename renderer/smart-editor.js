@@ -48,7 +48,7 @@ Hub._seRenderSetup = function (panel) {
         <div class="form-group">
           <label class="form-label">Voiceover (áudio)</label>
           <div class="se-file-row">
-            <div class="se-path-display" id="seVoiceoverPath">Nenhum ficheiro selecionado</div>
+            <div class="se-path-display" id="seVoiceoverPath" ${st.voiceoverPath ? `title="${Hub._escHtml(st.voiceoverPath)}"` : ''}>${st.voiceoverPath ? Hub._escHtml(st.voiceoverPath.split(/[\\/]/).pop()) : 'Nenhum ficheiro selecionado'}</div>
             <button class="btn btn-secondary btn-small" id="seSelectVoiceover">${Hub.icons.mic} Escolher</button>
           </div>
         </div>
@@ -67,7 +67,7 @@ Hub._seRenderSetup = function (panel) {
         <div class="form-group">
           <label class="form-label">Pasta de saída</label>
           <div class="se-file-row">
-            <div class="se-path-display" id="seOutputPath">Automático</div>
+            <div class="se-path-display" id="seOutputPath">${st.outputFolder ? Hub._escHtml(st.outputFolder) : 'Automático'}</div>
             <button class="btn btn-secondary btn-small" id="seSelectOutput">${Hub.icons.folder} Escolher</button>
           </div>
         </div>

@@ -432,15 +432,17 @@ function register(mainWindow) {
 
   // Main pipeline
   ipcMain.handle('smart-editor-generate', async (_event, opts) => {
-    const { scriptId, scriptText: rawScriptText, audioPath, seriesIds, outputFolder, outputFilename } = opts;
+    const { scriptId, scriptText: rawScriptText, audioPath: directAudioPath, voiceoverPath, seriesIds, outputFolder, outputFilename } = opts;
+    const audioPath = directAudioPath || voiceoverPath;
     const settings = getSettings();
 
     if (!settings.elevateLabsApiKey) {
       return { success: false, error: 'API key não configurada. Vai a Definições.' };
     }
 
+    console.log('[SmartEditor] audioPath:', audioPath);
     if (!audioPath || !fs.existsSync(audioPath)) {
-      return { success: false, error: 'Ficheiro de áudio não encontrado.' };
+      return { success: false, error: `Ficheiro de áudio não encontrado: ${audioPath || '(vazio)'}` };
     }
 
     // Load script text from ID if provided
