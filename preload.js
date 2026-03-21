@@ -106,6 +106,15 @@ contextBridge.exposeInMainWorld('api', {
   seriesTraceOne: (id) => ipcRenderer.invoke('series-trace-one', id),
   onSeriesAnalyzeProgress: (cb) => ipcRenderer.on('series-analyze-progress', (_, d) => cb(d)),
 
+  // ── Smart Editor ──
+  smartEditorGenerate: (opts) => ipcRenderer.invoke('smart-editor-generate', opts),
+  smartEditorCancel: () => ipcRenderer.invoke('smart-editor-cancel'),
+  smartEditorSavePlan: (data) => ipcRenderer.invoke('smart-editor-save-plan', data),
+  smartEditorLoadPlan: (id) => ipcRenderer.invoke('smart-editor-load-plan', id),
+  smartEditorListPlans: () => ipcRenderer.invoke('smart-editor-list-plans'),
+  smartEditorExport: (opts) => ipcRenderer.invoke('smart-editor-export', opts),
+  onSmartEditorProgress: (cb) => ipcRenderer.on('smart-editor-progress', (_, d) => cb(d)),
+
   // ── Voiceover TTS (Elevate Labs) ──
   voiceoverGenerateTts: (opts) => ipcRenderer.invoke('voiceover-generate-tts', opts),
   onVoiceoverTtsProgress: (cb) => ipcRenderer.on('voiceover-tts-progress', (_, d) => cb(d)),

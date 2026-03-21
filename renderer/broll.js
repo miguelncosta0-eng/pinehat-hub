@@ -23,6 +23,12 @@ Hub.renderBroll = function () {
           <button class="btn btn-secondary btn-small" id="brollSelectOutput">Escolher</button>
         </div>
 
+        <div class="broll-series-row">
+          <label class="form-label">Carregar série</label>
+          <select class="input" id="brollSeriesSelect"><option value="">-- Seleciona uma série --</option></select>
+          <button class="btn btn-secondary btn-small" id="brollLoadSeries">Carregar</button>
+        </div>
+
         <div class="broll-content-area" id="brollContent"></div>
 
         <div class="broll-action-bar" id="brollActionBar">
@@ -33,9 +39,42 @@ Hub.renderBroll = function () {
     `;
 
     Hub._brollBindEvents();
+    Hub._brollLoadSeriesDropdown();
   }
 
   Hub._brollRenderContent();
+};
+
+Hub._brollLoadSeriesDropdown = async function () {
+  const select = document.getElementById('brollSeriesSelect');
+  if (!select) return;
+  try {
+    const series = await window.api.seriesGetAll();
+    select.innerHTML = '<option value="">-- Seleciona uma série --</option>';
+    for (const s of series) {
+      const epCount = s.episodes?.length || 0;
+      select.innerHTML += `<option value="${s.id}">${s.name} (${epCount} episódios)</option>`;
+    }
+  } catch (_) { /* ignore */ }
+};
+
+Hub._brollLoadSeries = async function () {
+  const select = document.getElementById('brollSeriesSelect');
+  const seriesId = select?.value;
+  if (!seriesId) { Hub.showToast('Seleciona uma série primeiro', 'error'); return; }
+
+  const series = await window.api.seriesGetAll();
+  const s = series.find(x => x.id === seriesId);
+  if (!s || !s.episodes?.length) { Hub.showToast('Série sem episódios', 'error'); return; }
+
+  const filePaths = s.episodes.map(ep => ep.filePath).filter(Boolean);
+  if (filePaths.length === 0) { Hub.showToast('Nenhum ficheiro encontrado', 'error'); return; }
+
+  // Clear existing files and load series episodes
+  Hub.state.broll.files = [];
+  Hub.state.broll.outputFolder = null;
+  await Hub._brollAddFiles(filePaths);
+  Hub.showToast(`${filePaths.length} episódios de "${s.name}" carregados`);
 };
 
 Hub._brollBindEvents = function () {
@@ -55,6 +94,7 @@ Hub._brollBindEvents = function () {
   });
 
   document.getElementById('brollGenerateBtn').addEventListener('click', () => Hub._brollGenerate());
+  document.getElementById('brollLoadSeries').addEventListener('click', () => Hub._brollLoadSeries());
 
   // Drag & drop on entire container
   container.addEventListener('dragover', (e) => {

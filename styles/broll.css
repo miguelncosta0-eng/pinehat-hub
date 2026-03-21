@@ -17,6 +17,23 @@
   flex-shrink: 0;
 }
 
+.broll-series-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.broll-series-row .form-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  font-weight: 500;
+  margin: 0;
+}
+.broll-series-row select { flex: 1; max-width: 300px; }
+
 .broll-output-row {
   display: flex;
   align-items: center;

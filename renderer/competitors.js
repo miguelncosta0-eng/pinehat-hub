@@ -317,7 +317,15 @@ Hub._renderCompetitorDetail = async function (panel, competitorId) {
     let currentRange = '30D';
 
     const drawCharts = () => {
-      const subsData = history.map((h) => ({ date: h.date, value: h.subscriberCount }));
+      // Daily subs gained (delta between consecutive snapshots)
+      const subsData = [];
+      for (let i = 1; i < history.length; i++) {
+        const delta = history[i].subscriberCount - history[i - 1].subscriberCount;
+        subsData.push({
+          date: history[i].date,
+          value: delta,
+        });
+      }
       // Daily views (delta between consecutive snapshots, skip duplicates)
       const viewsData = [];
       for (let i = 1; i < history.length; i++) {
@@ -330,7 +338,7 @@ Hub._renderCompetitorDetail = async function (panel, competitorId) {
       }
 
       Hub.drawLineChart(panel.querySelector('#chartSubs'), [
-        { label: 'Subscritores', data: subsData, color: accent },
+        { label: 'Subs/dia', data: subsData, color: accent },
       ], { timeRange: currentRange, formatValue: Hub._fmtNum });
 
       Hub.drawLineChart(panel.querySelector('#chartViews'), [

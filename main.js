@@ -34,6 +34,7 @@ function createWindow() {
   require('./main/ipc-seo').register();
 
   require('./main/ipc-chat-projects').register();
+  require('./main/ipc-smart-editor').register(mainWindow);
   require('./main/ipc-updater').register();
 
 }
