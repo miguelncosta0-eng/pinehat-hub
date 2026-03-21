@@ -1,19 +1,28 @@
 /**
- * Smart Editor — AI-powered automatic video editing.
- * Syncs B-Roll clips and still frames with voiceover narration.
+ * Smart Editor v2 — AI-powered automatic video editing.
+ * Three-phase approach:
+ *   1. Transcribe audio → word-level timestamps
+ *   2. AI plans editorial (which scenes match which narration)
+ *   3. FFmpeg extracts clips + still frames → assembles final video
+ *
+ * Key improvements:
+ *   - Episode summaries give AI context about what happens in each episode
+ *   - Character-first matching ensures the right characters appear
+ *   - Strict anti-repetition prevents reusing scenes
+ *   - Gap filling ensures video covers full audio duration
+ *   - Fallback between OpenAI and Elevate Labs APIs
  */
 const { ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { spawn } = require('child_process');
 const { DATA_DIR, readJson, writeJson, uuid, ensureDataDir } = require('./ipc-data');
 const { getSettings } = require('./ipc-settings');
 const { CHAT_BASE } = require('./elevate-api');
 const { findBinary, runFfmpeg, probeDuration, transcribe } = require('./whisper-utils');
 
 const SMART_DIR = path.join(DATA_DIR, 'smart-editor');
-const PARALLEL = Math.min(8, Math.max(2, Math.floor(os.cpus().length / 2)));
+const PARALLEL = Math.min(6, Math.max(2, Math.floor(os.cpus().length / 2)));
 
 let cancelled = false;
 let currentProcess = null;
@@ -23,267 +32,294 @@ function ensureSmartDir() {
   if (!fs.existsSync(SMART_DIR)) fs.mkdirSync(SMART_DIR, { recursive: true });
 }
 
-// ── Segment grouping: words → sentences ──
+// ═══════════════════════════════════════════════════════════
+// PHASE 1: TRANSCRIPTION → SEGMENTS
+// ═══════════════════════════════════════════════════════════
 
 function groupWordsIntoSegments(words) {
   if (!words || words.length === 0) return [];
-
   const segments = [];
-  let current = { words: [], startTime: words[0].start, endTime: words[0].end };
+  let cur = { words: [], startTime: words[0].start, endTime: words[0].end };
 
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
-    current.words.push(w.word);
-    current.endTime = w.end;
+    cur.words.push(w.word);
+    cur.endTime = w.end;
 
     const isEnd = /[.!?]$/.test(w.word.trim());
-    const nextGap = (i < words.length - 1) ? words[i + 1].start - w.end : 999;
-    const tooLong = current.endTime - current.startTime > 8; // max 8 seconds per segment
+    const nextGap = i < words.length - 1 ? words[i + 1].start - w.end : 999;
+    const tooLong = cur.endTime - cur.startTime > 10;
 
     if (isEnd || nextGap > 0.5 || tooLong) {
       segments.push({
-        text: current.words.join(' ').trim(),
-        startTime: current.startTime,
-        endTime: current.endTime,
+        text: cur.words.join(' ').trim(),
+        startTime: cur.startTime,
+        endTime: cur.endTime,
       });
       if (i < words.length - 1) {
-        current = { words: [], startTime: words[i + 1].start, endTime: words[i + 1].end };
+        cur = { words: [], startTime: words[i + 1].start, endTime: words[i + 1].end };
       }
     }
   }
-
-  // Push remaining
-  if (current.words.length > 0) {
-    segments.push({
-      text: current.words.join(' ').trim(),
-      startTime: current.startTime,
-      endTime: current.endTime,
-    });
+  if (cur.words.length > 0) {
+    segments.push({ text: cur.words.join(' ').trim(), startTime: cur.startTime, endTime: cur.endTime });
   }
-
   return segments;
 }
 
-// ── Build scene database for AI ──
-// Two-phase: full DB for search, compact per-batch for prompt
+// ═══════════════════════════════════════════════════════════
+// PHASE 2: SCENE DATABASE + AI PLANNING
+// ═══════════════════════════════════════════════════════════
 
-function buildFullSceneDatabase(seriesList) {
-  const allScenes = [];
+// Build complete scene database with episode context
+function buildSceneDB(seriesList) {
+  const scenes = [];
+  const episodeSummaries = {};
+
   for (const series of seriesList) {
     for (const ep of (series.episodes || [])) {
       if (!ep.scenes || ep.scenes.length === 0) continue;
+
+      const epScenes = [];
       for (const scene of ep.scenes) {
         if (!scene.description) continue;
-        allScenes.push({
+        const entry = {
+          id: `${ep.code}@${scene.time}`,
           episode: ep.code,
           time: scene.time,
-          description: scene.description,
-          characters: scene.characters || [],
+          desc: scene.description,
+          chars: (scene.characters || []).map(c => c.toLowerCase()),
           mood: scene.mood || 'unknown',
-        });
+          filePath: ep.filePath,
+        };
+        scenes.push(entry);
+        epScenes.push(entry);
+      }
+
+      // Auto-generate episode summary from its scenes
+      if (epScenes.length > 0) {
+        const allChars = [...new Set(epScenes.flatMap(s => s.chars))];
+        const moods = {};
+        epScenes.forEach(s => { moods[s.mood] = (moods[s.mood] || 0) + 1; });
+        const topMood = Object.entries(moods).sort((a, b) => b[1] - a[1])[0]?.[0] || 'unknown';
+
+        // Pick 3 representative descriptions (start, middle, end)
+        const picks = [
+          epScenes[0],
+          epScenes[Math.floor(epScenes.length / 2)],
+          epScenes[epScenes.length - 1],
+        ];
+        const summary = picks.map(p => p.desc.slice(0, 80)).join('. ');
+
+        episodeSummaries[ep.code] = {
+          chars: allChars.slice(0, 8),
+          mood: topMood,
+          sceneCount: epScenes.length,
+          summary: summary.slice(0, 250),
+        };
       }
     }
   }
-  console.log(`[SmartEditor] Full scene DB: ${allScenes.length} scenes`);
-  return allScenes;
+
+  console.log(`[SmartEditor] Scene DB: ${scenes.length} scenes, ${Object.keys(episodeSummaries).length} episodes`);
+  return { scenes, episodeSummaries };
 }
 
-// Build character aliases for better matching
-function buildCharacterAliases(characters) {
-  const aliases = {};
+// Character alias system for matching
+function buildCharAliases(characters) {
+  const map = {};
   for (const name of (characters || [])) {
-    const lower = name.toLowerCase();
-    const parts = lower.split(/\s+/);
-    // Full name
-    aliases[lower] = lower;
-    // First name only
-    if (parts[0].length > 2) aliases[parts[0]] = lower;
-    // Last name only
-    if (parts.length > 1 && parts[parts.length - 1].length > 2) aliases[parts[parts.length - 1]] = lower;
-    // Common variations
-    if (parts[0] === 'stan') { aliases['stanley'] = lower; aliases['grunkle stan'] = lower; aliases['grunkle'] = lower; }
-    if (parts[0] === 'stanford') { aliases['ford'] = lower; aliases['great uncle ford'] = lower; }
-    if (parts[0] === 'dipper') { aliases['mason'] = lower; }
-    if (parts[0] === 'soos') { aliases['jesus'] = lower; aliases['soos ramirez'] = lower; }
-    if (parts[0] === 'bill') { aliases['bill cipher'] = lower; aliases['cipher'] = lower; }
-    if (parts[0] === 'mabel') { aliases['mabel pines'] = lower; }
-    if (parts[0] === 'wendy') { aliases['wendy corduroy'] = lower; }
-    if (parts[0] === 'gideon') { aliases['gideon gleeful'] = lower; aliases['gleeful'] = lower; }
-    if (parts[0] === 'pacifica') { aliases['pacifica northwest'] = lower; aliases['northwest'] = lower; }
+    const low = name.toLowerCase();
+    const parts = low.split(/\s+/);
+    map[low] = low;
+    if (parts[0].length > 2) map[parts[0]] = low;
+    if (parts.length > 1 && parts[parts.length - 1].length > 2) map[parts[parts.length - 1]] = low;
+    // Gravity Falls specific aliases
+    if (parts[0] === 'stan') { map['stanley'] = low; map['grunkle stan'] = low; map['grunkle'] = low; map['mr. pines'] = low; }
+    if (parts[0] === 'stanford') { map['ford'] = low; map['great uncle ford'] = low; map['author'] = low; }
+    if (parts[0] === 'dipper') { map['mason'] = low; map['pine tree'] = low; }
+    if (parts[0] === 'mabel') { map['shooting star'] = low; }
+    if (parts[0] === 'soos') { map['jesus'] = low; map['handyman'] = low; }
+    if (parts[0] === 'bill') { map['cipher'] = low; map['bill cipher'] = low; map['triangle'] = low; map['dream demon'] = low; }
+    if (parts[0] === 'wendy') { map['corduroy'] = low; map['wendy corduroy'] = low; }
+    if (parts[0] === 'gideon') { map['gleeful'] = low; map['lil gideon'] = low; }
+    if (parts[0] === 'pacifica') { map['northwest'] = low; }
   }
-  return aliases;
+  return map;
 }
 
-// ── Embeddings-based scene matching ──
+// Find characters mentioned in text
+function findMentionedChars(text, aliases) {
+  const low = text.toLowerCase();
+  const found = new Set();
+  // Sort by length descending so "grunkle stan" matches before "stan"
+  const sortedAliases = Object.entries(aliases).sort((a, b) => b[0].length - a[0].length);
+  for (const [alias, fullName] of sortedAliases) {
+    if (low.includes(alias)) found.add(fullName);
+  }
+  return [...found];
+}
 
-async function generateEmbeddings(texts, apiKey) {
-  const BATCH_SIZE = 100;
-  const allEmbeddings = [];
+// Score a scene against voiceover text — CHARACTER MATCHING IS KING
+function scoreScene(scene, voText, mentionedChars, contextKeywords) {
+  let score = 0;
+  const descLow = scene.desc.toLowerCase();
 
-  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-    const batch = texts.slice(i, i + BATCH_SIZE);
-    const response = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'text-embedding-3-small',
-        input: batch,
-      }),
-    });
-
-    if (!response.ok) {
-      console.error(`[Embeddings] API error: ${response.status}`);
-      return null;
+  // ── CHARACTER MATCHING (highest weight) ──
+  for (const char of mentionedChars) {
+    const charParts = char.split(/\s+/);
+    // Scene has this character tagged
+    if (scene.chars.some(c => c === char || charParts.some(p => p.length > 2 && c.includes(p)))) {
+      score += 25;
     }
-
-    const data = await response.json();
-    for (const item of data.data) {
-      allEmbeddings.push(item.embedding);
+    // Character name appears in description
+    for (const part of charParts) {
+      if (part.length > 2 && descLow.includes(part)) score += 10;
     }
   }
 
-  return allEmbeddings;
-}
-
-function cosineSimilarity(a, b) {
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
+  // Penalty: scene shows characters NOT mentioned (less relevant)
+  if (mentionedChars.length > 0 && scene.chars.length > 0) {
+    const anyMatch = scene.chars.some(c =>
+      mentionedChars.some(m => m.includes(c) || c.includes(m.split(' ')[0]))
+    );
+    if (!anyMatch) score -= 5; // penalty for wrong characters
   }
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+
+  // ── KEYWORD MATCHING ──
+  for (const kw of contextKeywords) {
+    if (descLow.includes(kw)) score += 3;
+  }
+
+  // ── CONTEXTUAL PATTERNS ──
+  const voLow = voText.toLowerCase();
+  // Objects & places
+  if (/journal|diário|diary|book|livro/i.test(voLow) && /journal|book|diary|red book|gold|hand symbol/i.test(descLow)) score += 12;
+  if (/portal|máquina|machine/i.test(voLow) && /portal|machine|glow|basement|device/i.test(descLow)) score += 12;
+  if (/mystery shack|cabana|shack/i.test(voLow) && /shack|mystery|gift shop|tourist/i.test(descLow)) score += 8;
+  if (/forest|floresta|woods/i.test(voLow) && /forest|tree|wood|outdoor|pine/i.test(descLow)) score += 6;
+  if (/cipher wheel|zodiac|wheel/i.test(voLow) && /wheel|zodiac|symbol|cipher/i.test(descLow)) score += 10;
+
+  // Actions & emotions
+  if (/fight|luta|batalha|battle/i.test(voLow) && /fight|battle|attack|punch|combat/i.test(descLow)) score += 8;
+  if (/secret|segredo|escond|hid/i.test(voLow) && /secret|hidden|door|basement|behind/i.test(descLow)) score += 8;
+  if (/young|pequen|criança|kid|child|boy|menino/i.test(voLow) && /young|child|kid|boy|small|beach/i.test(descLow)) score += 8;
+  if (/sad|triste|cry|chorar|emotional/i.test(voLow) && /sad|cry|tear|emotional|hug/i.test(descLow)) score += 6;
+  if (/scary|medo|assust|creepy/i.test(voLow) && /scary|dark|shadow|creature|monster/i.test(descLow)) score += 6;
+
+  // Mood matching
+  if (scene.mood === 'action' && /luta|atac|corr|fug|explo|fight|run|chase|battle/i.test(voLow)) score += 4;
+  if (scene.mood === 'dramatic' && /segredo|mistér|escur|perigo|secret|dark|danger|reveal/i.test(voLow)) score += 4;
+  if (scene.mood === 'quiet' && /calm|paz|tranquil|quiet|peace|think|reflect/i.test(voLow)) score += 3;
+
+  return score;
 }
 
-async function findRelevantScenesEmbeddings(allScenes, batchText, maxScenes, apiKey, cachedEmbeddings) {
-  // Generate embedding for the voiceover text
-  const queryEmbeddings = await generateEmbeddings([batchText], apiKey);
-  if (!queryEmbeddings || queryEmbeddings.length === 0) return null;
+// Extract meaningful keywords from voiceover text
+function extractKeywords(text) {
+  const stopWords = new Set(['the', 'a', 'an', 'is', 'was', 'are', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might',
+    'shall', 'can', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'into',
+    'through', 'during', 'before', 'after', 'about', 'between', 'under', 'above', 'but', 'and',
+    'or', 'not', 'no', 'nor', 'so', 'yet', 'both', 'either', 'neither', 'each', 'every', 'all',
+    'any', 'few', 'more', 'most', 'other', 'some', 'such', 'than', 'too', 'very', 'just',
+    'that', 'this', 'these', 'those', 'what', 'which', 'who', 'whom', 'how', 'when', 'where',
+    'why', 'its', 'his', 'her', 'their', 'our', 'your', 'my', 'it', 'he', 'she', 'they', 'we',
+    'you', 'me', 'him', 'them', 'us', 'que', 'de', 'da', 'do', 'em', 'um', 'uma', 'para',
+    'com', 'por', 'mas', 'como', 'mais', 'também', 'não', 'se', 'ou', 'já', 'são', 'foi',
+    'era', 'ser', 'ter', 'está', 'este', 'essa', 'isso', 'ele', 'ela', 'eles', 'nos']);
 
-  const queryEmb = queryEmbeddings[0];
+  return text.toLowerCase()
+    .replace(/[^a-záàâãéèêíìîóòôõúùûç\s]/gi, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !stopWords.has(w));
+}
 
-  // Score each scene by cosine similarity
-  const scored = allScenes.map((scene, idx) => ({
-    ...scene,
-    score: cachedEmbeddings[idx] ? cosineSimilarity(queryEmb, cachedEmbeddings[idx]) : 0,
-  }));
+// Find best scenes for a voiceover batch — character-first, diversity-enforced
+function findBestScenes(allScenes, episodeSummaries, voText, charAliases, usedSceneIds, maxScenes = 120) {
+  const mentionedChars = findMentionedChars(voText, charAliases);
+  const keywords = extractKeywords(voText);
 
+  console.log(`[SmartEditor] Matching: chars=[${mentionedChars.join(',')}], keywords=${keywords.length}`);
+
+  // Score all unused scenes
+  const scored = [];
+  for (const scene of allScenes) {
+    if (usedSceneIds.has(scene.id)) continue; // skip used scenes
+    const score = scoreScene(scene, voText, mentionedChars, keywords);
+    if (score > 0) scored.push({ ...scene, score });
+  }
+
+  // Sort by score
   scored.sort((a, b) => b.score - a.score);
-  const top = scored.slice(0, maxScenes);
 
-  return top.map(s => {
-    const chars = s.characters?.length ? ` [${s.characters.join(',')}]` : '';
-    return `${s.episode}@${s.time}s${chars}: ${s.description.slice(0, 180)}`;
-  }).join('\n');
-}
-
-// For each batch, find the most relevant scenes based on voiceover text
-function findRelevantScenes(allScenes, batchText, maxScenes = 80, characterAliases = {}) {
-  const textLower = batchText.toLowerCase();
-  const words = textLower.split(/\s+/).filter(w => w.length > 3);
-
-  // Find which characters are mentioned in this batch text
-  const mentionedChars = new Set();
-  for (const [alias, fullName] of Object.entries(characterAliases)) {
-    if (textLower.includes(alias)) mentionedChars.add(fullName);
+  // Diversify: don't take more than 15 scenes from the same episode
+  const perEp = {};
+  const result = [];
+  for (const scene of scored) {
+    if (result.length >= maxScenes) break;
+    const epCount = perEp[scene.episode] || 0;
+    if (epCount >= 15) continue;
+    perEp[scene.episode] = epCount + 1;
+    result.push(scene);
   }
 
-  // Score each scene by relevance to batch text
-  const scored = allScenes.map(scene => {
-    let score = 0;
-    const descLower = scene.description.toLowerCase();
-    const charNames = (scene.characters || []).map(c => c.toLowerCase());
-
-    // Character name matches (highest priority)
-    for (const charName of charNames) {
-      const firstName = charName.split(' ')[0];
-      // Direct character match in voiceover text
-      if (mentionedChars.has(charName) || mentionedChars.has(firstName)) score += 15;
-      if (textLower.includes(charName)) score += 10;
-      if (firstName.length > 2 && textLower.includes(firstName)) score += 8;
-    }
-
-    // Check if scene description mentions characters from voiceover
-    for (const mentioned of mentionedChars) {
-      const mParts = mentioned.split(' ');
-      for (const part of mParts) {
-        if (part.length > 2 && descLower.includes(part)) score += 6;
-      }
-    }
-
-    // Word overlap (keywords from voiceover found in scene description)
-    for (const word of words) {
-      if (descLower.includes(word)) score += 2;
-    }
-
-    // Context words (young, old, kids, children, etc.)
-    if (/young|pequen|criança|kid|child|boy|menino/i.test(textLower) && /young|child|kid|boy|small/i.test(descLower)) score += 5;
-    if (/secret|segredo|escond/i.test(textLower) && /secret|hid|door|basement|portal/i.test(descLower)) score += 5;
-    if (/fight|luta|batalha|combat/i.test(textLower) && /fight|battle|attack|punch|hit/i.test(descLower)) score += 4;
-    if (/mystery|mistério|journal|diário/i.test(textLower) && /journal|book|mystery|clue|code/i.test(descLower)) score += 4;
-
-    // Mood matching
-    if (scene.mood === 'action' && /luta|atac|corr|fug|explo|fight|run|chase/i.test(textLower)) score += 3;
-    if (scene.mood === 'dramatic' && /segredo|mistér|escur|perigo|mort|secret|dark|danger/i.test(textLower)) score += 3;
-    if (scene.mood === 'dialogue' && /disse|fal|convers|explic|said|talk|explain/i.test(textLower)) score += 2;
-
-    return { ...scene, score };
-  });
-
-  // Sort by score descending, take top N
-  scored.sort((a, b) => b.score - a.score);
-  const relevant = scored.slice(0, maxScenes);
-
-  // Format for prompt
-  return relevant.map(s => {
-    const chars = s.characters?.length ? ` [${s.characters.join(',')}]` : '';
-    return `${s.episode}@${s.time}s${chars}: ${s.description.slice(0, 150)}`;
-  }).join('\n');
-}
-
-// Legacy compact format for small scene databases
-function buildSceneDatabase(series, maxPerEp = 3) {
-  const lines = [];
-  let totalScenes = 0;
-  const MAX_TOTAL = 40;
-
-  for (const ep of (series.episodes || [])) {
-    if (!ep.scenes || ep.scenes.length === 0) continue;
-    if (totalScenes >= MAX_TOTAL) break;
-
-    const validScenes = ep.scenes.filter(s => s.description);
-    const step = Math.max(1, Math.floor(validScenes.length / maxPerEp));
-    const picked = [];
-    for (let i = 0; i < validScenes.length && picked.length < maxPerEp; i += step) {
-      picked.push(validScenes[i]);
-    }
-
-    if (picked.length === 0) continue;
-    lines.push(`${ep.code}: ${picked.map(s => `[${s.time}s]${s.description.slice(0, 100)}`).join(' | ')}`);
-    totalScenes += picked.length;
-  }
-  const result = lines.join('\n');
-  console.log(`[SmartEditor] Scene DB: ${totalScenes} scenes, ${result.length} chars`);
+  console.log(`[SmartEditor] Found ${result.length} relevant scenes (top score: ${result[0]?.score || 0})`);
   return result;
 }
 
-// ── AI Editorial Plan ──
+// Format scenes for AI prompt — compact but informative
+function formatScenesForPrompt(scenes) {
+  return scenes.map(s => {
+    const chars = s.chars.length > 0 ? ` [${s.chars.join(', ')}]` : '';
+    return `${s.episode}@${s.time}s${chars} (${s.mood}): ${s.desc.slice(0, 200)}`;
+  }).join('\n');
+}
 
-async function generateEditorialPlan(segments, allScenes, seriesName, characters, settings, onProgress) {
-  const apiKey = settings.elevateLabsApiKey;
+// Build episode context — tell AI what happens in each episode
+function buildEpisodeContext(episodeSummaries, relevantEpisodes) {
+  const lines = [];
+  for (const epCode of relevantEpisodes) {
+    const info = episodeSummaries[epCode];
+    if (!info) continue;
+    const chars = info.chars.slice(0, 5).join(', ');
+    lines.push(`${epCode}: ${chars} | ${info.mood} | ${info.summary.slice(0, 120)}`);
+  }
+  return lines.join('\n');
+}
 
-  // Batch segments for long videos (max ~2 min of content per batch)
+// ── AI Planning — the brain of the Smart Editor ──
+
+async function generateEditorialPlan(segments, sceneDB, seriesName, characters, settings, onProgress) {
+  const charAliases = buildCharAliases(characters);
+  const charactersList = (characters || []).join(', ') || 'unknown';
+
+  // Choose API — prefer OpenAI, fallback to Elevate Labs
+  const openaiKey = settings.openaiApiKey;
+  const elevateKey = settings.elevateLabsApiKey;
+
+  let apiBase, apiKey, model;
+  if (openaiKey) {
+    apiBase = 'https://api.openai.com/v1';
+    apiKey = openaiKey;
+    model = 'gpt-4o-mini'; // cheaper but great at JSON
+  } else if (elevateKey) {
+    apiBase = CHAT_BASE;
+    apiKey = elevateKey;
+    model = 'gemini-2.5-flash'; // fast and cheap on Elevate
+  } else {
+    throw new Error('Nenhuma API configurada. Configura OpenAI ou Elevate Labs nas Definições.');
+  }
+  console.log(`[SmartEditor] Planning with ${openaiKey ? 'OpenAI (gpt-4o-mini)' : 'Elevate Labs (' + model + ')'}`);
+
+  // Batch segments — max 90 seconds per batch for better precision
   const batches = [];
   let batch = [];
   let batchDuration = 0;
-  const MAX_BATCH_DURATION = 120;
 
   for (const seg of segments) {
     const dur = seg.endTime - seg.startTime;
-    if (batchDuration + dur > MAX_BATCH_DURATION && batch.length > 0) {
+    if (batchDuration + dur > 90 && batch.length > 0) {
       batches.push(batch);
       batch = [];
       batchDuration = 0;
@@ -293,27 +329,10 @@ async function generateEditorialPlan(segments, allScenes, seriesName, characters
   }
   if (batch.length > 0) batches.push(batch);
 
-  const allItems = [];
-  const charactersList = (characters || []).join(', ') || 'unknown';
-  const charAliases = buildCharacterAliases(characters);
+  console.log(`[SmartEditor] ${batches.length} batches from ${segments.length} segments`);
 
-  // Generate embeddings for ALL scenes (once, cached for all batches)
-  let cachedEmbeddings = null;
-  const openaiKey = settings.openaiApiKey;
-  if (openaiKey && allScenes.length > 0) {
-    onProgress({ phase: 'planning', percent: 0, detail: 'A gerar embeddings para matching semântico...' });
-    console.log(`[SmartEditor] Generating embeddings for ${allScenes.length} scenes...`);
-    const sceneTexts = allScenes.map(s => {
-      const chars = s.characters?.length ? `Characters: ${s.characters.join(', ')}. ` : '';
-      return `${s.episode} ${chars}${s.description}`;
-    });
-    cachedEmbeddings = await generateEmbeddings(sceneTexts, openaiKey);
-    if (cachedEmbeddings) {
-      console.log(`[SmartEditor] Embeddings generated: ${cachedEmbeddings.length}`);
-    } else {
-      console.warn(`[SmartEditor] Embeddings failed, falling back to text matching`);
-    }
-  }
+  const allItems = [];
+  const usedSceneIds = new Set();
 
   for (let b = 0; b < batches.length; b++) {
     if (cancelled) throw new Error('Cancelado');
@@ -321,293 +340,308 @@ async function generateEditorialPlan(segments, allScenes, seriesName, characters
     onProgress({
       phase: 'planning',
       percent: Math.round((b / batches.length) * 100),
-      detail: `A planear batch ${b + 1}/${batches.length}...`,
+      detail: `A planear ${b + 1}/${batches.length}...`,
     });
 
     const batchSegs = batches[b];
     const batchText = batchSegs.map(s => s.text).join(' ');
-    const segList = batchSegs.map((s, i) => `${i}: [${s.startTime.toFixed(1)}s-${s.endTime.toFixed(1)}s] "${s.text}"`).join('\n');
+    const batchStart = batchSegs[0].startTime;
+    const batchEnd = batchSegs[batchSegs.length - 1].endTime;
 
-    const usedSceneKeys = new Set(allItems.map(it => `${it.episode}@${it.sceneTime}`));
-    const unusedScenes = allScenes.filter(s => !usedSceneKeys.has(`${s.episode}@${s.time}`));
-    const unusedIndices = allScenes.map((s, i) => usedSceneKeys.has(`${s.episode}@${s.time}`) ? -1 : i).filter(i => i >= 0);
+    // Find best matching scenes for this batch
+    const bestScenes = findBestScenes(
+      sceneDB.scenes, sceneDB.episodeSummaries,
+      batchText, charAliases, usedSceneIds, 80
+    );
 
-    let relevantScenes = '';
-
-    // Use embeddings if available (much better semantic matching)
-    if (cachedEmbeddings) {
-      // Build unused scenes with their original indices for embedding lookup
-      const unusedWithIdx = unusedIndices.map(i => ({ ...allScenes[i], _idx: i }));
-      const embResult = await findRelevantScenesEmbeddings(
-        unusedWithIdx, batchText, 100, openaiKey,
-        unusedWithIdx.map(s => cachedEmbeddings[s._idx])
-      );
-      if (embResult) {
-        relevantScenes = embResult;
-        console.log(`[SmartEditor] Batch ${b + 1}: embeddings matched 100 scenes`);
-      }
+    if (bestScenes.length === 0) {
+      console.warn(`[SmartEditor] No relevant scenes for batch ${b + 1}, using random`);
+      continue;
     }
 
-    // Fallback to text matching
-    if (!relevantScenes) {
-      relevantScenes = findRelevantScenes(unusedScenes, batchText, 100, charAliases);
-      console.log(`[SmartEditor] Batch ${b + 1}: text matched 100 scenes`);
-    }
+    // Get relevant episodes for context
+    const relevantEps = [...new Set(bestScenes.map(s => s.episode))].slice(0, 10);
+    const epContext = buildEpisodeContext(sceneDB.episodeSummaries, relevantEps);
 
-    const usedList = allItems.length > 0
-      ? `\nALREADY USED (do NOT reuse):\n${[...usedSceneKeys].slice(-15).join(', ')}\n`
-      : '';
+    const segList = batchSegs.map((s, i) =>
+      `[${s.startTime.toFixed(1)}s → ${s.endTime.toFixed(1)}s] "${s.text}"`
+    ).join('\n');
 
-    const prompt = `You are an expert YouTube video editor. Create B-Roll for "${seriesName}".
+    const sceneList = formatScenesForPrompt(bestScenes.slice(0, 60));
+
+    const prompt = `You are a professional video editor creating B-Roll for a YouTube video about "${seriesName}".
 Characters: ${charactersList}
 
-VOICEOVER:
+EPISODE CONTEXT:
+${epContext}
+
+VOICEOVER (${batchStart.toFixed(1)}s → ${batchEnd.toFixed(1)}s):
 ${segList}
 
-SCENES (ranked by relevance — pick from these):
-${relevantScenes}
-${usedList}
-Return ONLY a JSON array. Each object:
-{"startTime":N,"endTime":N,"type":"video_clip"|"still_frame","episode":"S01E01","sceneTime":N,"clipDuration":N,"effect":"zoom_in"|"zoom_out"|"pan_left"|"pan_right"}
+AVAILABLE SCENES (ranked by relevance):
+${sceneList}
 
-STRICT RULES:
-1. MATCH what is being SAID. "Stan hid a secret" → show STAN, not Dipper.
-2. episode@time from scenes list → use as episode + sceneTime in JSON.
-3. NEVER reuse a scene already used above. Every scene must be UNIQUE.
-4. video_clip: 3-5 seconds of actual video. still_frame: frozen frame with zoom/pan.
-5. Cover ${batchSegs[0].startTime.toFixed(1)}s to ${batchSegs[batchSegs.length - 1].endTime.toFixed(1)}s fully, no gaps.
-6. Segments: 3-8 seconds each. Mix video_clip and still_frame.
-7. Vary effects: zoom_in, zoom_out, pan_left, pan_right.
+OUTPUT: JSON array. Each object:
+{"startTime":N,"endTime":N,"type":"video"|"still","ep":"S01E01","t":N,"fx":"zi"|"zo"|"pl"|"pr"}
+
+RULES:
+1. MATCH the visual to what is SAID. If narration says "Stan" → show a scene with Stan, NOT Dipper or Mabel.
+2. ep = episode code, t = scene timestamp (from the list above). ONLY use scenes from the list.
+3. video = 3-5s moving clip. still = frozen frame with zoom/pan effect (zi=zoom in, zo=zoom out, pl=pan left, pr=pan right).
+4. Alternate: video → still → video → still. But allow 2 videos in a row if it's action.
+5. Cover ${batchStart.toFixed(1)}s to ${batchEnd.toFixed(1)}s fully. NO GAPS. Each segment: 3-8 seconds.
+6. NEVER repeat the same ep@t combination.
+7. When narration describes something emotional/slow → use still frames. Action/movement → use video clips.
 
 JSON:`;
 
-    console.log(`[SmartEditor] Prompt length: ${prompt.length} chars`);
+    // Call AI with retry
+    let items = null;
+    for (let attempt = 0; attempt < 3 && !items; attempt++) {
+      if (attempt > 0) {
+        console.log(`[SmartEditor] Retry ${attempt} for batch ${b + 1}`);
+        await new Promise(r => setTimeout(r, 2000 * attempt));
+      }
 
-    // Use OpenAI API for planning (more reliable, no daily token limit)
-    const planApiBase = openaiKey ? 'https://api.openai.com/v1' : CHAT_BASE;
-    const planApiKey = openaiKey || apiKey;
-    const planModel = openaiKey ? 'gpt-4o' : 'gemini-2.5-pro';
+      try {
+        const resp = await fetch(`${apiBase}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: 4000,
+            temperature: 0.1,
+          }),
+        });
 
-    console.log(`[SmartEditor] Using ${openaiKey ? 'OpenAI (gpt-4o)' : 'Elevate Labs'} for planning`);
+        if (!resp.ok) {
+          const errText = await resp.text();
+          console.error(`[SmartEditor] API ${resp.status}: ${errText.slice(0, 200)}`);
+          if (resp.status === 429) {
+            // Rate limited — try other API
+            if (apiBase === 'https://api.openai.com/v1' && elevateKey) {
+              console.log('[SmartEditor] OpenAI rate limited, switching to Elevate Labs');
+              apiBase = CHAT_BASE; apiKey = elevateKey; model = 'gemini-2.5-flash';
+            }
+            await new Promise(r => setTimeout(r, 5000));
+          }
+          continue;
+        }
 
-    const response = await fetch(`${planApiBase}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${planApiKey}`,
-      },
-      body: JSON.stringify({
-        model: planModel,
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 8000,
-        temperature: 0.2,
-      }),
-    });
+        const data = await resp.json();
+        const content = data.choices?.[0]?.message?.content || '';
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`API error ${response.status}: ${errText.slice(0, 300)}`);
+        if (!content) {
+          console.error(`[SmartEditor] Empty response batch ${b + 1}:`, JSON.stringify(data).slice(0, 300));
+          continue;
+        }
+
+        // Parse JSON — handle markdown blocks, raw arrays, etc.
+        const jsonStr = content.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/)?.[1]
+          || content.match(/\[[\s\S]*\]/)?.[0];
+
+        if (!jsonStr) {
+          console.error(`[SmartEditor] No JSON in batch ${b + 1}:`, content.slice(0, 300));
+          continue;
+        }
+
+        const parsed = JSON.parse(jsonStr);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          items = parsed;
+        }
+      } catch (err) {
+        console.error(`[SmartEditor] Batch ${b + 1} error: ${err.message}`);
+      }
     }
 
-    const data = await response.json();
-    console.log(`[SmartEditor] Batch ${b + 1} raw response:`, JSON.stringify(data).slice(0, 500));
-    const content = data.choices?.[0]?.message?.content || data.choices?.[0]?.text || '';
-    console.log(`[SmartEditor] Batch ${b + 1} content (${content.length} chars):`, content.slice(0, 300));
-
-    // Check for empty response — might be rate limit or content filter
-    if (!content) {
-      const reason = data.choices?.[0]?.finish_reason || 'unknown';
-      const errMsg = data.error?.message || '';
-      const rawStr = JSON.stringify(data).slice(0, 400);
-      console.error(`[SmartEditor] Empty response. Full:`, JSON.stringify(data));
-      throw new Error(`Resposta vazia (${reason}). Raw: ${rawStr}`);
+    if (!items) {
+      console.warn(`[SmartEditor] Batch ${b + 1} failed after retries, generating fallback`);
+      // Fallback: create segments from best scenes directly
+      let t = batchStart;
+      for (let i = 0; i < bestScenes.length && t < batchEnd; i++) {
+        const s = bestScenes[i];
+        const dur = Math.min(5, batchEnd - t);
+        if (dur < 1) break;
+        items = items || [];
+        items.push({
+          startTime: t,
+          endTime: t + dur,
+          type: i % 2 === 0 ? 'video' : 'still',
+          ep: s.episode,
+          t: s.time,
+          fx: ['zi', 'zo', 'pl', 'pr'][i % 4],
+        });
+        t += dur;
+      }
+      if (!items) items = [];
     }
 
-    // Parse JSON from response — handle markdown code blocks, raw JSON, etc.
-    let jsonStr = null;
-
-    // Try 1: extract from ```json ... ``` block
-    const codeBlockMatch = content.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/);
-    if (codeBlockMatch) jsonStr = codeBlockMatch[1];
-
-    // Try 2: find raw JSON array
-    if (!jsonStr) {
-      const rawMatch = content.match(/\[[\s\S]*\]/);
-      if (rawMatch) jsonStr = rawMatch[0];
+    // Normalize items to full format and track used scenes
+    for (const item of items) {
+      const normalized = {
+        startTime: parseFloat(item.startTime) || batchStart,
+        endTime: parseFloat(item.endTime) || batchStart + 5,
+        type: (item.type === 'still' || item.type === 'still_frame') ? 'still_frame' : 'video_clip',
+        episode: item.ep || item.episode || bestScenes[0]?.episode || 'S01E01',
+        sceneTime: parseInt(item.t || item.sceneTime) || 0,
+        effect: { zi: 'zoom_in', zo: 'zoom_out', pl: 'pan_left', pr: 'pan_right' }[item.fx] || item.effect || 'zoom_in',
+        clipDuration: 5,
+      };
+      allItems.push(normalized);
+      usedSceneIds.add(`${normalized.episode}@${normalized.sceneTime}`);
     }
 
-    // Try 3: maybe it's just the array without brackets context
-    if (!jsonStr) {
-      // Try wrapping in brackets
-      const objMatch = content.match(/\{[\s\S]*"type"[\s\S]*\}/g);
-      if (objMatch) jsonStr = `[${objMatch.join(',')}]`;
-    }
-
-    if (!jsonStr) {
-      console.error(`[SmartEditor] No JSON found in batch ${b + 1}. Full response:`, content);
-      throw new Error(`AI não devolveu JSON válido no batch ${b + 1}. Resposta: "${content.slice(0, 200)}"`);
-    }
-
-    try {
-      const items = JSON.parse(jsonStr);
-      console.log(`[SmartEditor] Batch ${b + 1}: ${items.length} items parsed`);
-      allItems.push(...items);
-    } catch (e) {
-      console.error(`[SmartEditor] JSON parse error in batch ${b + 1}:`, e.message, jsonStr.slice(0, 200));
-      throw new Error(`Erro ao parsear JSON do batch ${b + 1}: ${e.message}`);
-    }
+    console.log(`[SmartEditor] Batch ${b + 1}: ${items.length} items`);
   }
 
   return allItems;
 }
 
-// ── Validate and fix the editorial plan ──
+// ═══════════════════════════════════════════════════════════
+// PHASE 2.5: VALIDATE AND FIX PLAN
+// ═══════════════════════════════════════════════════════════
 
-function validatePlan(plan, series, audioDuration) {
+function validatePlan(plan, seriesData, audioDuration) {
   const episodes = {};
-  for (const ep of (series.episodes || [])) {
+  for (const ep of (seriesData.episodes || [])) {
     episodes[ep.code] = ep;
   }
 
-  const MIN_DURATION = 2;   // minimum 2 seconds per segment
-  const MAX_DURATION = 12;  // maximum 12 seconds per segment
   const effects = ['zoom_in', 'zoom_out', 'pan_left', 'pan_right'];
-  const usedScenes = new Set(); // track used scenes to prevent duplicates
+  const usedScenes = new Set();
 
-  const valid = [];
+  // First pass: clean and validate each item
+  const cleaned = [];
   for (const item of plan) {
-    // Check episode exists
+    // Verify episode exists
     if (!episodes[item.episode]) {
-      console.warn(`[SmartEditor] Episode ${item.episode} not found, skipping`);
-      continue;
+      // Find any valid episode
+      const validEp = Object.keys(episodes)[0];
+      if (!validEp) continue;
+      item.episode = validEp;
     }
 
-    // Prevent duplicate scenes
-    const sceneKey = `${item.episode}@${item.sceneTime}`;
-    if (usedScenes.has(sceneKey)) {
-      // Shift sceneTime by 10-30s to get a nearby but different scene
-      item.sceneTime = (item.sceneTime || 0) + 10 + Math.floor(Math.random() * 20);
+    // Prevent exact duplicates
+    const key = `${item.episode}@${item.sceneTime}`;
+    if (usedScenes.has(key)) {
+      // Shift to nearby scene
+      const ep = episodes[item.episode];
+      if (ep?.scenes) {
+        const available = ep.scenes.filter(s => !usedScenes.has(`${item.episode}@${s.time}`));
+        if (available.length > 0) {
+          item.sceneTime = available[Math.floor(Math.random() * available.length)].time;
+        } else {
+          item.sceneTime += 20 + Math.floor(Math.random() * 40);
+        }
+      } else {
+        item.sceneTime += 20 + Math.floor(Math.random() * 40);
+      }
     }
     usedScenes.add(`${item.episode}@${item.sceneTime}`);
-    // Ensure required fields
+
+    // Sanitize values
     item.startTime = parseFloat(item.startTime) || 0;
     item.endTime = parseFloat(item.endTime) || item.startTime + 5;
-    item.sceneTime = parseInt(item.sceneTime) || 0;
+    item.sceneTime = Math.max(0, parseInt(item.sceneTime) || 0);
     item.type = item.type === 'still_frame' ? 'still_frame' : 'video_clip';
-    if (item.type === 'video_clip') {
-      item.clipDuration = Math.min(parseFloat(item.clipDuration) || 5, 5);
-    }
-    if (item.type === 'still_frame') {
-      item.effect = effects.includes(item.effect) ? item.effect : 'zoom_in';
-    }
+    item.effect = effects.includes(item.effect) ? item.effect : effects[cleaned.length % 4];
+    item.clipDuration = item.type === 'video_clip' ? Math.min(5, item.endTime - item.startTime) : 0;
 
-    // Enforce minimum duration
-    let duration = item.endTime - item.startTime;
-    if (duration < MIN_DURATION) {
-      item.endTime = item.startTime + MIN_DURATION;
-      duration = MIN_DURATION;
-    }
+    // Enforce duration bounds
+    let dur = item.endTime - item.startTime;
+    if (dur < 2) { item.endTime = item.startTime + 2; dur = 2; }
+    if (dur > 10) { item.endTime = item.startTime + 10; dur = 10; }
 
-    // Enforce maximum duration — split into multiple segments
-    if (duration > MAX_DURATION) {
-      let t = item.startTime;
-      while (t < item.endTime) {
-        const segEnd = Math.min(t + MAX_DURATION, item.endTime);
-        const remaining = segEnd - t;
-        if (remaining < MIN_DURATION && valid.length > 0) break; // skip tiny leftover
-        valid.push({
-          ...item,
-          startTime: t,
-          endTime: segEnd,
-          type: valid.length % 3 === 0 ? 'video_clip' : 'still_frame',
-          effect: effects[valid.length % effects.length],
-          clipDuration: Math.min(5, segEnd - t),
-        });
-        t = segEnd;
-      }
-      continue; // already pushed split segments
-    }
-
-    valid.push(item);
+    cleaned.push(item);
   }
 
   // Sort by startTime
-  valid.sort((a, b) => a.startTime - b.startTime);
+  cleaned.sort((a, b) => a.startTime - b.startTime);
 
-  // Fill gaps — if there's a gap > 0.5s between segments, add a still frame
-  const filled = [];
-  for (let i = 0; i < valid.length; i++) {
-    const item = valid[i];
+  // Second pass: fill gaps and ensure continuity
+  const final = [];
+  let lastEnd = 0;
 
-    if (filled.length > 0) {
-      const prev = filled[filled.length - 1];
-      const gap = item.startTime - prev.endTime;
-      if (gap > 0.5) {
-        // Fill gap with still frame from same or previous episode
-        filled.push({
-          startTime: prev.endTime,
-          endTime: item.startTime,
-          type: 'still_frame',
-          episode: prev.episode,
-          sceneTime: (prev.sceneTime || 0) + 10,
-          effect: effects[filled.length % effects.length],
-          clipDuration: 5,
-        });
-      }
-    }
-
-    filled.push(item);
-  }
-
-  // Fill end — if last segment ends before audio duration
-  if (audioDuration && filled.length > 0) {
-    const last = filled[filled.length - 1];
-    const remaining = audioDuration - last.endTime;
-    if (remaining > 1) {
-      // Split remaining into MAX_DURATION chunks
-      let t = last.endTime;
-      while (t < audioDuration) {
-        const segEnd = Math.min(t + MAX_DURATION, audioDuration);
-        if (segEnd - t < 1) break;
-        filled.push({
+  for (const item of cleaned) {
+    // Fill gap before this item
+    const gap = item.startTime - lastEnd;
+    if (gap > 0.5) {
+      // Insert gap-filler segments
+      let t = lastEnd;
+      while (t < item.startTime - 0.3) {
+        const gapDur = Math.min(6, item.startTime - t);
+        if (gapDur < 1) break;
+        // Use previous item's episode with shifted time
+        const prevItem = final.length > 0 ? final[final.length - 1] : item;
+        final.push({
           startTime: t,
-          endTime: segEnd,
+          endTime: t + gapDur,
           type: 'still_frame',
-          episode: last.episode,
-          sceneTime: (last.sceneTime || 0) + Math.floor(Math.random() * 60),
-          effect: effects[filled.length % effects.length],
+          episode: prevItem.episode,
+          sceneTime: (prevItem.sceneTime || 0) + 30 + Math.floor(Math.random() * 60),
+          effect: effects[final.length % 4],
           clipDuration: 5,
         });
-        t = segEnd;
+        t += gapDur;
       }
+    }
+
+    // Adjust item to start where last ended (prevent overlap)
+    if (item.startTime < lastEnd) {
+      const dur = item.endTime - item.startTime;
+      item.startTime = lastEnd;
+      item.endTime = lastEnd + dur;
+    }
+
+    final.push(item);
+    lastEnd = item.endTime;
+  }
+
+  // Fill tail — extend to full audio duration
+  if (audioDuration && lastEnd < audioDuration - 1) {
+    let t = lastEnd;
+    const lastItem = final[final.length - 1] || { episode: 'S01E01', sceneTime: 60 };
+    while (t < audioDuration - 0.5) {
+      const dur = Math.min(8, audioDuration - t);
+      if (dur < 1) break;
+      final.push({
+        startTime: t,
+        endTime: t + dur,
+        type: 'still_frame',
+        episode: lastItem.episode,
+        sceneTime: (lastItem.sceneTime || 0) + 30 + Math.floor(Math.random() * 120),
+        effect: effects[final.length % 4],
+        clipDuration: 5,
+      });
+      t += dur;
     }
   }
 
-  console.log(`[SmartEditor] Validated: ${plan.length} → ${filled.length} segments (min ${MIN_DURATION}s, max ${MAX_DURATION}s)`);
-  return filled;
+  console.log(`[SmartEditor] Validated: ${plan.length} → ${final.length} segments, covers 0 → ${final[final.length - 1]?.endTime?.toFixed(1) || 0}s (audio: ${audioDuration?.toFixed(1) || '?'}s)`);
+  return final;
 }
 
-// ── FFmpeg: Extract video clip ──
+// ═══════════════════════════════════════════════════════════
+// PHASE 3: EXTRACTION + ASSEMBLY
+// ═══════════════════════════════════════════════════════════
 
 function extractVideoClip(episodePath, sceneTime, duration, outputPath) {
   const ffmpegPath = findBinary('ffmpeg');
-  const args = [
+  return runFfmpeg(ffmpegPath, [
     '-y', '-ss', String(sceneTime), '-i', episodePath,
     '-t', String(duration),
     '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black',
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '30', '-an',
     outputPath,
-  ];
-  return runFfmpeg(ffmpegPath, args, null, 60000);
+  ], null, 60000);
 }
-
-// ── FFmpeg: Extract still frame + Ken Burns ──
 
 async function extractStillFrame(episodePath, sceneTime, duration, effect, outputPath) {
   const ffmpegPath = findBinary('ffmpeg');
   const tmpFrame = outputPath.replace('.mp4', '_frame.jpg');
 
-  // Step 1: Extract frame at correct aspect ratio (scale to fit 1920x1080 area)
+  // Extract frame
   await runFfmpeg(ffmpegPath, [
     '-y', '-ss', String(sceneTime), '-i', episodePath,
     '-vframes', '1',
@@ -615,254 +649,196 @@ async function extractStillFrame(episodePath, sceneTime, duration, effect, outpu
     '-q:v', '2', tmpFrame,
   ], null, 30000);
 
-  if (!fs.existsSync(tmpFrame)) {
-    throw new Error(`Frame extraction failed at ${sceneTime}s`);
-  }
+  if (!fs.existsSync(tmpFrame)) throw new Error(`Frame extraction failed at ${sceneTime}s`);
 
-  // Step 2: Ken Burns effect on the 1920x1080 frame
-  const frames = Math.round(duration * 30); // 30fps
-  let vf;
-
-  // Scale up first for zoom headroom, then zoompan outputs 1920x1080
-  switch (effect) {
-    case 'zoom_in':
-      vf = `scale=2880:1620,zoompan=z='min(zoom+0.001,1.5)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`;
-      break;
-    case 'zoom_out':
-      vf = `scale=2880:1620,zoompan=z='if(eq(on\\,0)\\,1.5\\,max(zoom-0.001\\,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`;
-      break;
-    case 'pan_left':
-      vf = `scale=2400:1350,crop=1920:1080:'(iw-ow)*(1-t/${duration})':0`;
-      break;
-    case 'pan_right':
-      vf = `scale=2400:1350,crop=1920:1080:'(iw-ow)*t/${duration}':0`;
-      break;
-    default:
-      vf = `scale=2160:1620,zoompan=z='min(zoom+0.0015,1.5)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`;
-  }
+  // Ken Burns effect
+  const frames = Math.round(duration * 30);
+  const vfMap = {
+    zoom_in: `scale=2880:1620,zoompan=z='min(zoom+0.001,1.5)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`,
+    zoom_out: `scale=2880:1620,zoompan=z='if(eq(on\\,0)\\,1.5\\,max(zoom-0.001\\,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`,
+    pan_left: `scale=2400:1350,crop=1920:1080:'(iw-ow)*(1-t/${duration})':0`,
+    pan_right: `scale=2400:1350,crop=1920:1080:'(iw-ow)*t/${duration}':0`,
+  };
 
   await runFfmpeg(ffmpegPath, [
     '-y', '-loop', '1', '-i', tmpFrame, '-t', String(duration),
-    '-vf', vf,
+    '-vf', vfMap[effect] || vfMap.zoom_in,
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '30', '-an',
     outputPath,
   ], null, 120000);
 
-  // Cleanup frame
   try { fs.unlinkSync(tmpFrame); } catch (_) {}
 }
 
-// ── Parallel asset extraction ──
-
-async function extractAssets(plan, series, tmpDir, onProgress) {
+async function extractAssets(plan, seriesData, tmpDir, onProgress) {
   const episodes = {};
-  for (const ep of (series.episodes || [])) {
+  for (const ep of (seriesData.episodes || [])) {
     episodes[ep.code] = ep.filePath;
   }
 
   const total = plan.length;
   let completed = 0;
 
-  // Process in parallel batches
   for (let i = 0; i < plan.length; i += PARALLEL) {
     if (cancelled) throw new Error('Cancelado');
 
     const batch = plan.slice(i, i + PARALLEL);
     await Promise.all(batch.map(async (item, batchIdx) => {
       const idx = i + batchIdx;
-      const outputPath = path.join(tmpDir, `segment_${String(idx).padStart(5, '0')}.mp4`);
+      const outputPath = path.join(tmpDir, `seg_${String(idx).padStart(5, '0')}.mp4`);
       item._outputPath = outputPath;
 
       const episodePath = episodes[item.episode];
-      const duration = item.endTime - item.startTime;
+      const duration = Math.max(1, item.endTime - item.startTime);
       const ffmpegPath = findBinary('ffmpeg');
 
       if (!episodePath || !fs.existsSync(episodePath)) {
-        console.warn(`[SmartEditor] Episode file not found: ${item.episode}`);
-        // Try any available episode as fallback
-        const fallbackEp = Object.values(episodes).find(p => p && fs.existsSync(p));
-        if (fallbackEp) {
-          const randomTime = Math.floor(Math.random() * 300) + 30;
-          await extractStillFrame(fallbackEp, randomTime, duration, item.effect || 'zoom_in', outputPath).catch(() => {});
+        // Fallback: use any available episode
+        const fallback = Object.values(episodes).find(p => p && fs.existsSync(p));
+        if (fallback) {
+          const rndTime = 30 + Math.floor(Math.random() * 300);
+          try {
+            await extractStillFrame(fallback, rndTime, duration, item.effect || 'zoom_in', outputPath);
+            return;
+          } catch (_) {}
         }
-        if (!fs.existsSync(outputPath)) {
-          await runFfmpeg(ffmpegPath, [
-            '-y', '-f', 'lavfi', '-i', `color=c=black:s=1920x1080:d=${duration}:r=30`,
-            '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an',
-            outputPath,
-          ], null, 15000);
-        }
+        // Last resort: black frame
+        await runFfmpeg(ffmpegPath, [
+          '-y', '-f', 'lavfi', '-i', `color=c=0x1a1a2e:s=1920x1080:d=${duration}:r=30`,
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an', outputPath,
+        ], null, 15000);
         return;
       }
 
-      // Try extraction with retry on different sceneTime
-      let extracted = false;
-      for (let attempt = 0; attempt < 3 && !extracted; attempt++) {
+      // Try extraction with retries (shift timestamp on failure)
+      let ok = false;
+      for (let attempt = 0; attempt < 3 && !ok; attempt++) {
         try {
-          const sceneTime = item.sceneTime + (attempt * 15); // shift 15s each retry
-
+          const t = item.sceneTime + (attempt * 20);
           if (item.type === 'video_clip') {
             const clipDur = Math.min(item.clipDuration || 5, duration);
-            await extractVideoClip(episodePath, sceneTime, clipDur, outputPath);
+            await extractVideoClip(episodePath, t, clipDur, outputPath);
 
-            // If clip is shorter than segment, extend with freeze frame
-            if (clipDur < duration - 0.1) {
-              const extendPath = path.join(tmpDir, `extend_${String(idx).padStart(5, '0')}.mp4`);
-              const lastFramePath = path.join(tmpDir, `lastframe_${idx}.jpg`);
+            // Extend clip if shorter than segment
+            if (clipDur < duration - 0.5) {
+              const lastFrame = path.join(tmpDir, `lf_${idx}.jpg`);
+              const extPath = path.join(tmpDir, `ext_${idx}.mp4`);
+              try {
+                await runFfmpeg(ffmpegPath, ['-y', '-sseof', '-0.1', '-i', outputPath, '-vframes', '1', '-q:v', '2', lastFrame], null, 15000);
+                if (fs.existsSync(lastFrame)) {
+                  const remaining = duration - clipDur;
+                  const holdFrames = Math.round(remaining * 30);
+                  await runFfmpeg(ffmpegPath, [
+                    '-y', '-loop', '1', '-i', lastFrame, '-t', String(remaining),
+                    '-vf', `scale=1920:1080,zoompan=z='min(zoom+0.001,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${holdFrames}:s=1920x1080:fps=30`,
+                    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '30', '-an', extPath,
+                  ], null, 60000);
 
-              await runFfmpeg(ffmpegPath, ['-y', '-sseof', '-0.1', '-i', outputPath, '-vframes', '1', '-q:v', '2', lastFramePath], null, 15000);
-
-              if (fs.existsSync(lastFramePath)) {
-                const remaining = duration - clipDur;
-                const holdFrames = Math.round(remaining * 30);
-                await runFfmpeg(ffmpegPath, [
-                  '-y', '-loop', '1', '-i', lastFramePath, '-t', String(remaining),
-                  '-vf', `scale=1920:1080,zoompan=z='min(zoom+0.001,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${holdFrames}:s=1920x1080:fps=30`,
-                  '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '30', '-an',
-                  extendPath,
-                ], null, 60000);
-
-                const concatFile = path.join(tmpDir, `concat_${idx}.txt`);
-                fs.writeFileSync(concatFile, `file '${outputPath.replace(/\\/g, '/')}'\nfile '${extendPath.replace(/\\/g, '/')}'\n`);
-                const mergedPath = path.join(tmpDir, `merged_${String(idx).padStart(5, '0')}.mp4`);
-                await runFfmpeg(ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', concatFile, '-c', 'copy', mergedPath], null, 30000);
-
-                fs.unlinkSync(outputPath);
-                fs.renameSync(mergedPath, outputPath);
-                try { fs.unlinkSync(extendPath); fs.unlinkSync(lastFramePath); fs.unlinkSync(concatFile); } catch (_) {}
-              }
+                  const concatTxt = path.join(tmpDir, `cat_${idx}.txt`);
+                  fs.writeFileSync(concatTxt, `file '${outputPath.replace(/\\/g, '/')}'\nfile '${extPath.replace(/\\/g, '/')}'\n`);
+                  const merged = path.join(tmpDir, `mrg_${idx}.mp4`);
+                  await runFfmpeg(ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', concatTxt, '-c', 'copy', merged], null, 30000);
+                  fs.unlinkSync(outputPath);
+                  fs.renameSync(merged, outputPath);
+                  try { fs.unlinkSync(extPath); fs.unlinkSync(lastFrame); fs.unlinkSync(concatTxt); } catch (_) {}
+                }
+              } catch (_) {} // Extension failed, just use the short clip
             }
           } else {
-            await extractStillFrame(episodePath, sceneTime, duration, item.effect || 'zoom_in', outputPath);
+            await extractStillFrame(episodePath, t, duration, item.effect || 'zoom_in', outputPath);
           }
-          extracted = true;
+          ok = true;
         } catch (err) {
-          console.warn(`[SmartEditor] Extract attempt ${attempt + 1} failed for ${item.episode}@${item.sceneTime}s: ${err.message}`);
+          console.warn(`[SmartEditor] Extract attempt ${attempt + 1} failed: ${err.message}`);
         }
       }
 
-      // Final fallback: still frame from beginning of episode
-      if (!extracted || !fs.existsSync(outputPath)) {
-        console.warn(`[SmartEditor] All attempts failed, using fallback frame for segment ${idx}`);
+      // Final fallback
+      if (!ok || !fs.existsSync(outputPath)) {
         try {
           await extractStillFrame(episodePath, 60, duration, 'zoom_in', outputPath);
         } catch (_) {
           await runFfmpeg(ffmpegPath, [
-            '-y', '-f', 'lavfi', '-i', `color=c=black:s=1920x1080:d=${duration}:r=30`,
-            '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an',
-            outputPath,
+            '-y', '-f', 'lavfi', '-i', `color=c=0x1a1a2e:s=1920x1080:d=${duration}:r=30`,
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an', outputPath,
           ], null, 15000);
         }
       }
     }));
 
     completed += batch.length;
-    onProgress({
-      phase: 'extracting',
-      percent: Math.round((completed / total) * 100),
-      detail: `A extrair ${completed}/${total} segmentos...`,
-      current: completed,
-      total,
-    });
+    onProgress({ phase: 'extracting', percent: Math.round((completed / total) * 100), detail: `A extrair ${completed}/${total}...`, current: completed, total });
   }
 }
 
-// ── Final assembly ──
-
 async function assembleVideo(plan, audioPath, outputPath, tmpDir, onProgress) {
   const ffmpegPath = findBinary('ffmpeg');
+  onProgress({ phase: 'assembling', percent: 0, detail: 'A montar vídeo...' });
 
-  onProgress({ phase: 'assembling', percent: 0, detail: 'A juntar segmentos...' });
-
-  // Write concat file — fill gaps with black frames for missing segments
   const concatFile = path.join(tmpDir, 'concat_final.txt');
   const lines = [];
-  let missingCount = 0;
 
   for (let i = 0; i < plan.length; i++) {
     const item = plan[i];
     if (item._outputPath && fs.existsSync(item._outputPath)) {
       lines.push(`file '${item._outputPath.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`);
-    } else {
-      // Create black frame for missing segment
-      missingCount++;
-      const dur = item.endTime - item.startTime;
-      const blackPath = path.join(tmpDir, `black_${String(i).padStart(5, '0')}.mp4`);
-      try {
-        await runFfmpeg(ffmpegPath, [
-          '-y', '-f', 'lavfi', '-i', `color=c=black:s=1920x1080:d=${dur}:r=30`,
-          '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an',
-          blackPath,
-        ], null, 15000);
-        lines.push(`file '${blackPath.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`);
-      } catch (_) {
-        console.warn(`[SmartEditor] Failed to create black frame for segment ${i}`);
-      }
     }
   }
 
-  console.log(`[SmartEditor] Assembly: ${lines.length} segments (${missingCount} missing → black frames)`);
-  if (lines.length === 0) throw new Error('Nenhum segmento extraído com sucesso');
+  if (lines.length === 0) throw new Error('Nenhum segmento extraído com sucesso.');
+  console.log(`[SmartEditor] Assembly: ${lines.length} segments`);
 
-  fs.writeFileSync(concatFile, lines.join('\n'));
+  fs.writeFileSync(concatFile, lines.join('\n') + '\n');
 
-  // Concat video segments
-  const concatOutput = path.join(tmpDir, 'concat_video.mp4');
+  // Concat video
+  const concatOut = path.join(tmpDir, 'concat_video.mp4');
   await runFfmpeg(ffmpegPath, [
     '-y', '-f', 'concat', '-safe', '0', '-i', concatFile,
-    '-c', 'copy', '-movflags', '+faststart',
-    concatOutput,
+    '-c', 'copy', '-movflags', '+faststart', concatOut,
   ], null, 300000);
 
   onProgress({ phase: 'assembling', percent: 50, detail: 'A juntar áudio...' });
 
-  // Merge with voiceover audio
+  // Merge with audio — use shortest to avoid desync
   await runFfmpeg(ffmpegPath, [
-    '-y', '-i', concatOutput, '-i', audioPath,
+    '-y', '-i', concatOut, '-i', audioPath,
     '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
-    '-map', '0:v:0', '-map', '1:a:0',
-    '-movflags', '+faststart',
-    outputPath,
+    '-map', '0:v:0', '-map', '1:a:0', '-shortest',
+    '-movflags', '+faststart', outputPath,
   ], null, 300000);
 
   onProgress({ phase: 'done', percent: 100, detail: 'Concluído!' });
 }
 
-// ── Register IPC handlers ──
+// ═══════════════════════════════════════════════════════════
+// IPC REGISTRATION
+// ═══════════════════════════════════════════════════════════
 
 function register(mainWindow) {
   const send = (data) => {
     try { mainWindow.webContents.send('smart-editor-progress', data); } catch (_) {}
   };
 
-  // Main pipeline
   ipcMain.handle('smart-editor-generate', async (_event, opts) => {
-    const { scriptId, scriptText: rawScriptText, audioPath: directAudioPath, voiceoverPath, seriesIds, outputFolder, outputFilename } = opts;
-    const audioPath = directAudioPath || voiceoverPath;
+    const { scriptId, scriptText: rawScript, audioPath: directAudio, voiceoverPath, seriesIds, outputFolder, outputFilename } = opts;
+    const audioPath = directAudio || voiceoverPath;
     const settings = getSettings();
 
-    if (!settings.elevateLabsApiKey) {
+    if (!settings.elevateLabsApiKey && !settings.openaiApiKey) {
       return { success: false, error: 'API key não configurada. Vai a Definições.' };
     }
-
-    console.log('[SmartEditor] audioPath:', audioPath);
     if (!audioPath || !fs.existsSync(audioPath)) {
       return { success: false, error: `Ficheiro de áudio não encontrado: ${audioPath || '(vazio)'}` };
     }
 
-    // Load script text from ID if provided
-    let scriptText = rawScriptText || '';
+    let scriptText = rawScript || '';
     if (scriptId && !scriptText) {
-      const scriptPath = path.join(DATA_DIR, 'scripts', `${scriptId}.json`);
-      const scriptData = readJson(scriptPath);
-      if (scriptData && scriptData.content) {
-        scriptText = scriptData.content;
-      }
+      const sd = readJson(path.join(DATA_DIR, 'scripts', `${scriptId}.json`));
+      if (sd?.content) scriptText = sd.content;
     }
 
     cancelled = false;
     ensureSmartDir();
-
     const tmpDir = path.join(os.tmpdir(), `pinehat-smart-${Date.now()}`);
     fs.mkdirSync(tmpDir, { recursive: true });
 
@@ -870,194 +846,102 @@ function register(mainWindow) {
       // Step 1: Transcribe
       send({ phase: 'transcribing', percent: 0, detail: 'A transcrever áudio...' });
       const transcription = await transcribe(audioPath, 0, settings, (p) => {
-        send({ phase: 'transcribing', percent: Math.round(p.percent * 0.2), detail: p.detail || 'A transcrever...' });
+        send({ phase: 'transcribing', percent: Math.round(p.percent * 0.15), detail: p.detail || 'A transcrever...' });
       });
 
       if (!transcription.words || transcription.words.length === 0) {
         return { success: false, error: 'Transcrição falhou — sem palavras detectadas.' };
       }
-
       console.log(`[SmartEditor] Transcription: ${transcription.words.length} words`);
 
-      // Get audio duration for plan validation
       let audioDuration = 0;
-      try {
-        audioDuration = await probeDuration(audioPath);
-        console.log(`[SmartEditor] Audio duration: ${audioDuration}s`);
-      } catch (_) {}
+      try { audioDuration = await probeDuration(audioPath); } catch (_) {}
+      console.log(`[SmartEditor] Audio: ${audioDuration}s`);
 
-      // Step 2: Group into segments
-      send({ phase: 'segmenting', percent: 20, detail: 'A agrupar em segmentos...' });
+      // Step 2: Segment
+      send({ phase: 'segmenting', percent: 15, detail: 'A agrupar segmentos...' });
       const segments = groupWordsIntoSegments(transcription.words);
-      console.log(`[SmartEditor] Segments: ${segments.length}`);
+      console.log(`[SmartEditor] ${segments.length} segments`);
 
-      // Step 3: Load series and build scene database
-      send({ phase: 'planning', percent: 25, detail: 'A preparar base de cenas...' });
+      // Step 3: Build scene database
+      send({ phase: 'planning', percent: 20, detail: 'A preparar cenas...' });
       const seriesData = readJson(path.join(DATA_DIR, 'series.json'));
       const allSeries = seriesData?.series || [];
-
-      // Support multiple series
       const selectedIds = Array.isArray(seriesIds) ? seriesIds : [seriesIds];
-      let combinedSceneDb = '';
-      let combinedSeries = { episodes: [], characters: [] };
-      let seriesName = '';
 
+      let combined = { episodes: [], characters: [] };
+      let seriesName = '';
       const seriesToSearch = [];
+
       for (const sid of selectedIds) {
         const s = allSeries.find(x => x.id === sid);
         if (!s) continue;
         seriesName += (seriesName ? ' + ' : '') + s.name;
-        combinedSeries.episodes.push(...(s.episodes || []));
-        combinedSeries.characters.push(...(s.characters || []));
+        combined.episodes.push(...(s.episodes || []));
+        combined.characters.push(...(s.characters || []));
         seriesToSearch.push(s);
       }
 
-      if (combinedSeries.episodes.length === 0) {
-        return { success: false, error: 'Nenhuma série selecionada ou séries sem episódios analisados.' };
-      }
-
-      const analyzedEps = combinedSeries.episodes.filter(ep => ep.scenes && ep.scenes.length > 0);
-      if (analyzedEps.length === 0) {
+      const analyzed = combined.episodes.filter(e => e.scenes?.length > 0);
+      if (analyzed.length === 0) {
         return { success: false, error: 'Nenhum episódio analisado. Corre a Análise Profunda primeiro.' };
       }
 
-      // Build full scene database for intelligent search
-      const allScenes = buildFullSceneDatabase(seriesToSearch);
-      console.log(`[SmartEditor] Full scene DB: ${allScenes.length} scenes from ${analyzedEps.length} episodes`);
+      const sceneDB = buildSceneDB(seriesToSearch);
 
-      // Step 4: AI Editorial Plan with intelligent scene matching
+      // Step 4: AI Plan
       const plan = await generateEditorialPlan(
-        segments, allScenes, seriesName, combinedSeries.characters, settings,
-        (p) => send({ phase: 'planning', percent: 25 + Math.round(p.percent * 0.25), detail: p.detail }),
+        segments, sceneDB, seriesName, combined.characters, settings,
+        (p) => send({ phase: 'planning', percent: 20 + Math.round(p.percent * 0.30), detail: p.detail }),
       );
-
       console.log(`[SmartEditor] Raw plan: ${plan.length} items`);
 
       // Step 5: Validate
-      send({ phase: 'validating', percent: 50, detail: 'A validar plano...' });
-      const validPlan = validatePlan(plan, combinedSeries, audioDuration);
-      console.log(`[SmartEditor] Valid plan: ${validPlan.length} items`);
+      send({ phase: 'validating', percent: 50, detail: 'A validar...' });
+      const validPlan = validatePlan(plan, combined, audioDuration);
+      console.log(`[SmartEditor] Valid: ${validPlan.length} items`);
 
       if (validPlan.length === 0) {
         return { success: false, error: 'Plano editorial vazio após validação.' };
       }
 
-      // Save plan for review
+      // Save plan
       const planId = uuid();
-      const planPath = path.join(SMART_DIR, `${planId}.json`);
-      writeJson(planPath, {
-        id: planId,
-        seriesName,
-        segments,
-        plan: validPlan,
-        audioPath,
-        scriptText: scriptText?.slice(0, 500),
-        createdAt: new Date().toISOString(),
+      writeJson(path.join(SMART_DIR, `${planId}.json`), {
+        id: planId, seriesName, segments, plan: validPlan, audioPath,
+        scriptText: scriptText?.slice(0, 500), createdAt: new Date().toISOString(),
       });
 
-      // Step 6: Extract assets
-      await extractAssets(validPlan, combinedSeries, tmpDir, (p) => {
+      // Step 6: Extract
+      await extractAssets(validPlan, combined, tmpDir, (p) => {
         send({ phase: 'extracting', percent: 50 + Math.round(p.percent * 0.35), detail: p.detail, current: p.current, total: p.total });
       });
 
       // Step 7: Assemble
-      const finalOutput = path.join(outputFolder || tmpDir, outputFilename || 'smart_edit.mp4');
-      await assembleVideo(validPlan, audioPath, finalOutput, tmpDir, (p) => {
+      const finalOut = path.join(outputFolder || tmpDir, outputFilename || 'smart_edit.mp4');
+      await assembleVideo(validPlan, audioPath, finalOut, tmpDir, (p) => {
         send({ phase: p.phase, percent: 85 + Math.round(p.percent * 0.15), detail: p.detail });
       });
 
       return {
-        success: true,
-        outputPath: finalOutput,
-        planId,
+        success: true, outputPath: finalOut, planId,
         segmentCount: validPlan.length,
         clipCount: validPlan.filter(i => i.type === 'video_clip').length,
         frameCount: validPlan.filter(i => i.type === 'still_frame').length,
       };
     } catch (err) {
-      if (err.message === 'Cancelado') {
-        return { success: false, error: 'Cancelado pelo utilizador.' };
-      }
+      if (err.message === 'Cancelado') return { success: false, error: 'Cancelado pelo utilizador.' };
       console.error('[SmartEditor] Error:', err);
       return { success: false, error: err.message };
     } finally {
-      // Cleanup tmp
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     }
   });
 
-  // Cancel
   ipcMain.handle('smart-editor-cancel', () => {
     cancelled = true;
-    if (currentProcess) {
-      try { currentProcess.kill('SIGTERM'); } catch (_) {}
-    }
+    if (currentProcess) try { currentProcess.kill('SIGTERM'); } catch (_) {}
     return { success: true };
-  });
-
-  // Save plan
-  ipcMain.handle('smart-editor-save-plan', (_event, planData) => {
-    ensureSmartDir();
-    const planPath = path.join(SMART_DIR, `${planData.id}.json`);
-    writeJson(planPath, planData);
-    return { success: true };
-  });
-
-  // Load plan
-  ipcMain.handle('smart-editor-load-plan', (_event, planId) => {
-    const planPath = path.join(SMART_DIR, `${planId}.json`);
-    const data = readJson(planPath);
-    if (!data) return { success: false, error: 'Plano não encontrado.' };
-    return { success: true, plan: data };
-  });
-
-  // List saved plans
-  ipcMain.handle('smart-editor-list-plans', () => {
-    ensureSmartDir();
-    const files = fs.readdirSync(SMART_DIR).filter(f => f.endsWith('.json'));
-    return files.map(f => {
-      const data = readJson(path.join(SMART_DIR, f));
-      if (!data) return null;
-      return { id: data.id, seriesName: data.seriesName, createdAt: data.createdAt, segmentCount: data.plan?.length || 0 };
-    }).filter(Boolean).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  });
-
-  // Export from edited plan
-  ipcMain.handle('smart-editor-export', async (_event, opts) => {
-    const { planId, audioPath, outputFolder, outputFilename } = opts;
-
-    cancelled = false;
-    const planPath = path.join(SMART_DIR, `${planId}.json`);
-    const planData = readJson(planPath);
-    if (!planData) return { success: false, error: 'Plano não encontrado.' };
-
-    const seriesData = readJson(path.join(DATA_DIR, 'series.json'));
-    const allSeries = seriesData?.series || [];
-    const combinedSeries = { episodes: [] };
-    for (const s of allSeries) {
-      combinedSeries.episodes.push(...(s.episodes || []));
-    }
-
-    const tmpDir = path.join(os.tmpdir(), `pinehat-smart-export-${Date.now()}`);
-    fs.mkdirSync(tmpDir, { recursive: true });
-
-    try {
-      await extractAssets(planData.plan, combinedSeries, tmpDir, (p) => {
-        send({ phase: 'extracting', percent: Math.round(p.percent * 0.7), detail: p.detail, current: p.current, total: p.total });
-      });
-
-      const audio = audioPath || planData.audioPath;
-      const finalOutput = path.join(outputFolder, outputFilename || 'smart_edit.mp4');
-      await assembleVideo(planData.plan, audio, finalOutput, tmpDir, (p) => {
-        send({ phase: p.phase, percent: 70 + Math.round(p.percent * 0.3), detail: p.detail });
-      });
-
-      return { success: true, outputPath: finalOutput };
-    } catch (err) {
-      return { success: false, error: err.message };
-    } finally {
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-    }
   });
 }
 
