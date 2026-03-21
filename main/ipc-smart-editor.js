@@ -191,7 +191,19 @@ function scoreScene(scene, voText, mentionedChars, contextKeywords) {
       const parts = char.split(/\s+/);
       return parts.some(p => p.length > 2 && descLow.includes(p));
     });
-    if (!anyInDesc) score -= 10; // penalty for scenes without the mentioned character in description
+    if (!anyInDesc) score -= 20; // strong penalty for missing character in description
+  }
+
+  // Penalty: description shows WRONG named characters (e.g., shows "Blubs" when we want "Stan")
+  if (mentionedChars.length > 0) {
+    const wrongChars = ['blubs', 'durland', 'mcgucket', 'toby', 'lazy susan', 'manly dan',
+      'robbie', 'tambry', 'thompson', 'candy', 'grenda', 'rumble', 'summerween'];
+    for (const wc of wrongChars) {
+      if (descLow.includes(wc)) {
+        // Only penalize if this wrong character is prominent (appears early in description)
+        if (descLow.indexOf(wc) < 60) score -= 30;
+      }
+    }
   }
 
   // ── KEYWORD MATCHING (low weight — prevents generic keywords from dominating) ──
