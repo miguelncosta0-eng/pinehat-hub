@@ -625,7 +625,11 @@ Return ONLY a JSON array with ${frameData.length} objects, one per frame in orde
     console.log(`[DeepAnalysis] ${episodeCode} done — ${scenes.length} frames, ${validScenes} with description`);
 
     if (!cancelled) {
-      series.episodes[eIdx] = { ...episode, analyzed: true, deepAnalyzed: true, scenes };
+      // Only mark deepAnalyzed if at least 40% of frames got descriptions
+      const successRate = total > 0 ? validScenes / total : 0;
+      const isGoodAnalysis = successRate >= 0.4;
+      console.log(`[DeepAnalysis] ${episodeCode}: ${validScenes}/${total} valid (${(successRate * 100).toFixed(0)}%) — ${isGoodAnalysis ? 'GOOD' : 'FAILED, will retry'}`);
+      series.episodes[eIdx] = { ...episode, analyzed: true, deepAnalyzed: isGoodAnalysis, scenes };
       all[sIdx] = series;
       saveSeries(all);
       mainWindow.webContents.send('series-analyze-progress', {
