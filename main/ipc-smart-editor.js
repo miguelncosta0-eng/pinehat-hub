@@ -197,37 +197,40 @@ async function generateEditorialPlan(segments, allScenes, seriesName, characters
     const segList = batchSegs.map((s, i) => `${i}: [${s.startTime.toFixed(1)}s-${s.endTime.toFixed(1)}s] "${s.text}"`).join('\n');
 
     // Find most relevant scenes for THIS batch's voiceover content
-    const relevantScenes = findRelevantScenes(allScenes, batchText, 80);
+    // Exclude scenes already used in previous batches
+    const usedSceneKeys = new Set(allItems.map(it => `${it.episode}@${it.sceneTime}`));
+    const relevantScenes = findRelevantScenes(
+      allScenes.filter(s => !usedSceneKeys.has(`${s.episode}@${s.time}`)),
+      batchText, 80
+    );
 
-    // Include last 3 items from previous batch for continuity
-    const prevContext = allItems.length > 0
-      ? `\nPREVIOUS (for continuity):\n${JSON.stringify(allItems.slice(-3))}\n`
+    // Build list of already used scenes to tell AI
+    const usedList = allItems.length > 0
+      ? `\nALREADY USED (do NOT reuse these):\n${[...usedSceneKeys].slice(-20).join(', ')}\n`
       : '';
 
-    const prompt = `You are an expert YouTube video editor creating B-Roll for an essay about "${seriesName}".
-Known characters: ${charactersList}
+    const prompt = `You are an expert YouTube video editor. Create B-Roll for "${seriesName}".
+Characters: ${charactersList}
 
-VOICEOVER (what is being said):
+VOICEOVER:
 ${segList}
-${prevContext}
-AVAILABLE SCENES (sorted by relevance to voiceover):
+
+SCENES (ranked by relevance — pick from these):
 ${relevantScenes}
+${usedList}
+Return ONLY a JSON array. Each object:
+{"startTime":N,"endTime":N,"type":"video_clip"|"still_frame","episode":"S01E01","sceneTime":N,"clipDuration":N,"effect":"zoom_in"|"zoom_out"|"pan_left"|"pan_right"}
 
-TASK: Pick the BEST scene for each moment based on what the voiceover is saying.
+STRICT RULES:
+1. MATCH what is being SAID. "Stan hid a secret" → show STAN, not Dipper.
+2. episode@time from scenes list → use as episode + sceneTime in JSON.
+3. NEVER reuse a scene already used above. Every scene must be UNIQUE.
+4. video_clip: 3-5 seconds of actual video. still_frame: frozen frame with zoom/pan.
+5. Cover ${batchSegs[0].startTime.toFixed(1)}s to ${batchSegs[batchSegs.length - 1].endTime.toFixed(1)}s fully, no gaps.
+6. Segments: 3-8 seconds each. Mix video_clip and still_frame.
+7. Vary effects: zoom_in, zoom_out, pan_left, pan_right.
 
-Return ONLY a JSON array:
-[{"startTime":NUMBER,"endTime":NUMBER,"type":"video_clip"|"still_frame","episode":"S01E01","sceneTime":NUMBER,"clipDuration":NUMBER,"effect":"zoom_in"|"zoom_out"|"pan_left"|"pan_right"}]
-
-RULES:
-1. MATCH CONTENT: If voiceover says "Stan was hiding a secret", pick a scene showing Stan, NOT Dipper or Mabel.
-2. Use the scene descriptions to match characters and actions to what's being said.
-3. The format episode@time in the scenes list = episode code and sceneTime for your JSON.
-4. video_clip: max 5 seconds. still_frame: Ken Burns zoom/pan effect.
-5. Cover the ENTIRE voiceover duration from ${batchSegs[0].startTime.toFixed(1)}s to ${batchSegs[batchSegs.length - 1].endTime.toFixed(1)}s.
-6. Alternate between video_clip and still_frame for visual variety.
-7. Each segment should be 3-8 seconds long.
-
-JSON ARRAY:`;
+JSON:`;
 
     console.log(`[SmartEditor] Prompt length: ${prompt.length} chars`);
 
@@ -319,8 +322,9 @@ function validatePlan(plan, series, audioDuration) {
   }
 
   const MIN_DURATION = 2;   // minimum 2 seconds per segment
-  const MAX_DURATION = 15;  // maximum 15 seconds per segment
+  const MAX_DURATION = 12;  // maximum 12 seconds per segment
   const effects = ['zoom_in', 'zoom_out', 'pan_left', 'pan_right'];
+  const usedScenes = new Set(); // track used scenes to prevent duplicates
 
   const valid = [];
   for (const item of plan) {
@@ -329,6 +333,14 @@ function validatePlan(plan, series, audioDuration) {
       console.warn(`[SmartEditor] Episode ${item.episode} not found, skipping`);
       continue;
     }
+
+    // Prevent duplicate scenes
+    const sceneKey = `${item.episode}@${item.sceneTime}`;
+    if (usedScenes.has(sceneKey)) {
+      // Shift sceneTime by 10-30s to get a nearby but different scene
+      item.sceneTime = (item.sceneTime || 0) + 10 + Math.floor(Math.random() * 20);
+    }
+    usedScenes.add(`${item.episode}@${item.sceneTime}`);
     // Ensure required fields
     item.startTime = parseFloat(item.startTime) || 0;
     item.endTime = parseFloat(item.endTime) || item.startTime + 5;
@@ -514,60 +526,85 @@ async function extractAssets(plan, series, tmpDir, onProgress) {
       item._outputPath = outputPath;
 
       const episodePath = episodes[item.episode];
+      const duration = item.endTime - item.startTime;
+      const ffmpegPath = findBinary('ffmpeg');
+
       if (!episodePath || !fs.existsSync(episodePath)) {
         console.warn(`[SmartEditor] Episode file not found: ${item.episode}`);
-        // Create black frame fallback
-        const ffmpegPath = findBinary('ffmpeg');
-        const dur = item.endTime - item.startTime;
-        await runFfmpeg(ffmpegPath, [
-          '-y', '-f', 'lavfi', '-i', `color=c=black:s=1920x1080:d=${dur}:r=30`,
-          '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an',
-          outputPath,
-        ], null, 30000);
+        // Try any available episode as fallback
+        const fallbackEp = Object.values(episodes).find(p => p && fs.existsSync(p));
+        if (fallbackEp) {
+          const randomTime = Math.floor(Math.random() * 300) + 30;
+          await extractStillFrame(fallbackEp, randomTime, duration, item.effect || 'zoom_in', outputPath).catch(() => {});
+        }
+        if (!fs.existsSync(outputPath)) {
+          await runFfmpeg(ffmpegPath, [
+            '-y', '-f', 'lavfi', '-i', `color=c=black:s=1920x1080:d=${duration}:r=30`,
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an',
+            outputPath,
+          ], null, 15000);
+        }
         return;
       }
 
-      const duration = item.endTime - item.startTime;
+      // Try extraction with retry on different sceneTime
+      let extracted = false;
+      for (let attempt = 0; attempt < 3 && !extracted; attempt++) {
+        try {
+          const sceneTime = item.sceneTime + (attempt * 15); // shift 15s each retry
 
-      if (item.type === 'video_clip') {
-        const clipDur = Math.min(item.clipDuration || 5, duration);
-        await extractVideoClip(episodePath, item.sceneTime, clipDur, outputPath);
+          if (item.type === 'video_clip') {
+            const clipDur = Math.min(item.clipDuration || 5, duration);
+            await extractVideoClip(episodePath, sceneTime, clipDur, outputPath);
 
-        // If clip is shorter than segment, extend with freeze frame
-        if (clipDur < duration - 0.1) {
-          const extendPath = path.join(tmpDir, `extend_${String(idx).padStart(5, '0')}.mp4`);
-          const lastFramePath = path.join(tmpDir, `lastframe_${idx}.jpg`);
-          const ffmpegPath = findBinary('ffmpeg');
+            // If clip is shorter than segment, extend with freeze frame
+            if (clipDur < duration - 0.1) {
+              const extendPath = path.join(tmpDir, `extend_${String(idx).padStart(5, '0')}.mp4`);
+              const lastFramePath = path.join(tmpDir, `lastframe_${idx}.jpg`);
 
-          // Extract last frame
-          await runFfmpeg(ffmpegPath, ['-y', '-sseof', '-0.1', '-i', outputPath, '-vframes', '1', '-q:v', '2', lastFramePath], null, 15000);
+              await runFfmpeg(ffmpegPath, ['-y', '-sseof', '-0.1', '-i', outputPath, '-vframes', '1', '-q:v', '2', lastFramePath], null, 15000);
 
-          if (fs.existsSync(lastFramePath)) {
-            const remaining = duration - clipDur;
-            const holdFrames = Math.round(remaining * 30);
-            await runFfmpeg(ffmpegPath, [
-              '-y', '-loop', '1', '-i', lastFramePath, '-t', String(remaining),
-              '-vf', `scale=1920:1080,zoompan=z='min(zoom+0.001,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${holdFrames}:s=1920x1080:fps=30`,
-              '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '30', '-an',
-              extendPath,
-            ], null, 60000);
+              if (fs.existsSync(lastFramePath)) {
+                const remaining = duration - clipDur;
+                const holdFrames = Math.round(remaining * 30);
+                await runFfmpeg(ffmpegPath, [
+                  '-y', '-loop', '1', '-i', lastFramePath, '-t', String(remaining),
+                  '-vf', `scale=1920:1080,zoompan=z='min(zoom+0.001,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${holdFrames}:s=1920x1080:fps=30`,
+                  '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '30', '-an',
+                  extendPath,
+                ], null, 60000);
 
-            // Concat clip + extension
-            const concatFile = path.join(tmpDir, `concat_${idx}.txt`);
-            const p1 = outputPath.replace(/\\/g, '/');
-            const p2 = extendPath.replace(/\\/g, '/');
-            fs.writeFileSync(concatFile, `file '${p1}'\nfile '${p2}'\n`);
-            const mergedPath = path.join(tmpDir, `merged_${String(idx).padStart(5, '0')}.mp4`);
-            await runFfmpeg(ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', concatFile, '-c', 'copy', mergedPath], null, 30000);
+                const concatFile = path.join(tmpDir, `concat_${idx}.txt`);
+                fs.writeFileSync(concatFile, `file '${outputPath.replace(/\\/g, '/')}'\nfile '${extendPath.replace(/\\/g, '/')}'\n`);
+                const mergedPath = path.join(tmpDir, `merged_${String(idx).padStart(5, '0')}.mp4`);
+                await runFfmpeg(ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', concatFile, '-c', 'copy', mergedPath], null, 30000);
 
-            // Replace original
-            fs.unlinkSync(outputPath);
-            fs.renameSync(mergedPath, outputPath);
-            try { fs.unlinkSync(extendPath); fs.unlinkSync(lastFramePath); fs.unlinkSync(concatFile); } catch (_) {}
+                fs.unlinkSync(outputPath);
+                fs.renameSync(mergedPath, outputPath);
+                try { fs.unlinkSync(extendPath); fs.unlinkSync(lastFramePath); fs.unlinkSync(concatFile); } catch (_) {}
+              }
+            }
+          } else {
+            await extractStillFrame(episodePath, sceneTime, duration, item.effect || 'zoom_in', outputPath);
           }
+          extracted = true;
+        } catch (err) {
+          console.warn(`[SmartEditor] Extract attempt ${attempt + 1} failed for ${item.episode}@${item.sceneTime}s: ${err.message}`);
         }
-      } else {
-        await extractStillFrame(episodePath, item.sceneTime, duration, item.effect, outputPath);
+      }
+
+      // Final fallback: still frame from beginning of episode
+      if (!extracted || !fs.existsSync(outputPath)) {
+        console.warn(`[SmartEditor] All attempts failed, using fallback frame for segment ${idx}`);
+        try {
+          await extractStillFrame(episodePath, 60, duration, 'zoom_in', outputPath);
+        } catch (_) {
+          await runFfmpeg(ffmpegPath, [
+            '-y', '-f', 'lavfi', '-i', `color=c=black:s=1920x1080:d=${duration}:r=30`,
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an',
+            outputPath,
+          ], null, 15000);
+        }
       }
     }));
 
