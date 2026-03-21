@@ -35,6 +35,11 @@ Hub.renderVoiceover = function () {
             <button class="btn btn-small btn-secondary" id="voPresetSave" title="Guardar preset" style="margin-bottom:1px;">Guardar</button>
             <button class="btn btn-small btn-danger" id="voPresetDelete" title="Apagar preset" style="margin-bottom:1px;display:${vo.activePreset !== undefined && vo.activePreset !== '' ? '' : 'none'};">✕</button>
           </div>
+          <div id="voPresetNameRow" style="display:none;margin-top:4px;display:none;gap:6px;align-items:center;">
+            <input class="input" id="voPresetNameInput" placeholder="Nome do preset..." style="flex:1;font-size:12px;padding:4px 8px;">
+            <button class="btn btn-small btn-primary" id="voPresetNameConfirm">OK</button>
+            <button class="btn btn-small btn-secondary" id="voPresetNameCancel">✕</button>
+          </div>
 
           <div class="vo-settings-row" style="margin-top:8px;">
             <div class="form-group" style="flex:1;">
@@ -278,12 +283,24 @@ Hub.renderVoiceover = function () {
   }
 
   // Save preset
-  panel.querySelector('#voPresetSave')?.addEventListener('click', async () => {
-    const name = prompt('Nome do preset:');
-    if (!name?.trim()) return;
+  // Show name input when clicking Guardar
+  panel.querySelector('#voPresetSave')?.addEventListener('click', () => {
+    const row = panel.querySelector('#voPresetNameRow');
+    if (row) {
+      row.style.display = 'flex';
+      const input = panel.querySelector('#voPresetNameInput');
+      if (input) { input.value = ''; input.focus(); }
+    }
+  });
+
+  // Confirm preset save
+  const savePreset = async () => {
+    const nameInput = panel.querySelector('#voPresetNameInput');
+    const name = nameInput?.value?.trim();
+    if (!name) { Hub.showToast('Escreve um nome para o preset', 'error'); return; }
 
     const preset = {
-      name: name.trim(),
+      name,
       voiceId: panel.querySelector('#voTtsVoiceId')?.value?.trim() || '',
       model: panel.querySelector('#voTtsModel')?.value || 'eleven_multilingual_v2',
       stability: parseFloat(panel.querySelector('#voStability')?.value ?? 0.5),
@@ -299,8 +316,17 @@ Hub.renderVoiceover = function () {
     await window.api.saveSetting('voPresets', presets);
     Hub.state.settings = await window.api.getSettings();
     Hub.state.voiceover.activePreset = presets.length - 1;
-    Hub.showToast(`Preset "${name.trim()}" guardado!`);
+    Hub.showToast(`Preset "${name}" guardado!`);
     Hub.renderVoiceover();
+  };
+
+  panel.querySelector('#voPresetNameConfirm')?.addEventListener('click', savePreset);
+  panel.querySelector('#voPresetNameInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') savePreset();
+  });
+  panel.querySelector('#voPresetNameCancel')?.addEventListener('click', () => {
+    const row = panel.querySelector('#voPresetNameRow');
+    if (row) row.style.display = 'none';
   });
 
   // Delete preset
@@ -309,7 +335,6 @@ Hub.renderVoiceover = function () {
     if (idx === undefined || idx === '') return;
     const presets = Hub.state.settings?.voPresets || [];
     const name = presets[idx]?.name || 'Preset';
-    if (!confirm(`Apagar o preset "${name}"?`)) return;
     presets.splice(idx, 1);
     await window.api.saveSetting('voPresets', presets);
     Hub.state.settings = await window.api.getSettings();
