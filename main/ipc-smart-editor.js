@@ -183,15 +183,39 @@ Devolve APENAS um JSON array (sem texto extra):
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '';
+    console.log(`[SmartEditor] Batch ${b + 1} response (${content.length} chars):`, content.slice(0, 300));
 
-    // Parse JSON from response
-    const jsonMatch = content.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error(`AI não devolveu JSON válido no batch ${b + 1}`);
+    // Parse JSON from response — handle markdown code blocks, raw JSON, etc.
+    let jsonStr = null;
+
+    // Try 1: extract from ```json ... ``` block
+    const codeBlockMatch = content.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/);
+    if (codeBlockMatch) jsonStr = codeBlockMatch[1];
+
+    // Try 2: find raw JSON array
+    if (!jsonStr) {
+      const rawMatch = content.match(/\[[\s\S]*\]/);
+      if (rawMatch) jsonStr = rawMatch[0];
+    }
+
+    // Try 3: maybe it's just the array without brackets context
+    if (!jsonStr) {
+      // Try wrapping in brackets
+      const objMatch = content.match(/\{[\s\S]*"type"[\s\S]*\}/g);
+      if (objMatch) jsonStr = `[${objMatch.join(',')}]`;
+    }
+
+    if (!jsonStr) {
+      console.error(`[SmartEditor] No JSON found in batch ${b + 1}. Full response:`, content);
+      throw new Error(`AI não devolveu JSON válido no batch ${b + 1}. Tenta novamente.`);
+    }
 
     try {
-      const items = JSON.parse(jsonMatch[0]);
+      const items = JSON.parse(jsonStr);
+      console.log(`[SmartEditor] Batch ${b + 1}: ${items.length} items parsed`);
       allItems.push(...items);
     } catch (e) {
+      console.error(`[SmartEditor] JSON parse error in batch ${b + 1}:`, e.message, jsonStr.slice(0, 200));
       throw new Error(`Erro ao parsear JSON do batch ${b + 1}: ${e.message}`);
     }
   }
