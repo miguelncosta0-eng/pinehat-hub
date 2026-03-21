@@ -292,26 +292,29 @@ async function extractStillFrame(episodePath, sceneTime, duration, effect, outpu
   const ffmpegPath = findBinary('ffmpeg');
   const tmpFrame = outputPath.replace('.mp4', '_frame.jpg');
 
-  // Step 1: Extract frame
+  // Step 1: Extract frame at correct aspect ratio (scale to fit 1920x1080 area)
   await runFfmpeg(ffmpegPath, [
     '-y', '-ss', String(sceneTime), '-i', episodePath,
-    '-vframes', '1', '-q:v', '2', tmpFrame,
+    '-vframes', '1',
+    '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
+    '-q:v', '2', tmpFrame,
   ], null, 30000);
 
   if (!fs.existsSync(tmpFrame)) {
     throw new Error(`Frame extraction failed at ${sceneTime}s`);
   }
 
-  // Step 2: Ken Burns effect
+  // Step 2: Ken Burns effect on the 1920x1080 frame
   const frames = Math.round(duration * 30); // 30fps
   let vf;
 
+  // Scale up first for zoom headroom, then zoompan outputs 1920x1080
   switch (effect) {
     case 'zoom_in':
-      vf = `scale=2160:1620,zoompan=z='min(zoom+0.0015,1.5)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`;
+      vf = `scale=2880:1620,zoompan=z='min(zoom+0.001,1.5)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`;
       break;
     case 'zoom_out':
-      vf = `scale=2880:1620,zoompan=z='if(eq(on\\,0)\\,1.5\\,max(zoom-0.0015\\,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`;
+      vf = `scale=2880:1620,zoompan=z='if(eq(on\\,0)\\,1.5\\,max(zoom-0.001\\,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=30`;
       break;
     case 'pan_left':
       vf = `scale=2400:1350,crop=1920:1080:'(iw-ow)*(1-t/${duration})':0`;
