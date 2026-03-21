@@ -623,6 +623,22 @@ function register(mainWindow) {
         }
       }
 
+      // Periodically save progress to disk (every 10 batches = ~20 frames)
+      // so that progress survives app crashes mid-episode
+      if ((batchStart + BATCH_SIZE) % (BATCH_SIZE * 10) === 0 && scenes.length > 0) {
+        try {
+          const freshAll = getSeries();
+          const freshSIdx = freshAll.findIndex(s => s.id === seriesId);
+          if (freshSIdx !== -1) {
+            freshAll[freshSIdx].episodes[eIdx] = { ...episode, analyzed: false, deepAnalyzed: false, scenes: [...scenes], partialAnalysis: true };
+            saveSeries(freshAll);
+            console.log(`[DeepAnalysis] Intermediate save: ${scenes.length} scenes for ${episodeCode}`);
+          }
+        } catch (saveErr) {
+          console.error(`[DeepAnalysis] Intermediate save failed: ${saveErr.message}`);
+        }
+      }
+
       // Delay between batches
       await new Promise(r => setTimeout(r, useOpenAI ? 2000 : 500));
     }
@@ -635,16 +651,23 @@ function register(mainWindow) {
     console.log(`[DeepAnalysis] ${episodeCode} done — ${scenes.length} frames, ${validScenes} with description`);
 
     if (!cancelled) {
-      // Only mark deepAnalyzed if at least 40% of frames got descriptions
-      const successRate = total > 0 ? validScenes / total : 0;
-      const isGoodAnalysis = successRate >= 0.4;
-      console.log(`[DeepAnalysis] ${episodeCode}: ${validScenes}/${total} valid (${(successRate * 100).toFixed(0)}%) — ${isGoodAnalysis ? 'GOOD' : 'FAILED, will retry'}`);
-      series.episodes[eIdx] = { ...episode, analyzed: true, deepAnalyzed: isGoodAnalysis, scenes };
-      all[sIdx] = series;
-      saveSeries(all);
-      mainWindow.webContents.send('series-analyze-progress', {
-        episodeCode, phase: 'episode-saved', analyzedCount: all[sIdx].episodes.filter(ep => ep.analyzed).length, validScenes,
-      });
+      // Re-read fresh data from disk to avoid overwriting other episodes' progress
+      const freshAll = getSeries();
+      const freshSIdx = freshAll.findIndex(s => s.id === seriesId);
+      if (freshSIdx === -1) {
+        console.error(`[DeepAnalysis] Series ${seriesId} not found on final save`);
+      } else {
+        // Only mark deepAnalyzed if at least 40% of frames got descriptions
+        const successRate = total > 0 ? validScenes / total : 0;
+        const isGoodAnalysis = successRate >= 0.4;
+        console.log(`[DeepAnalysis] ${episodeCode}: ${validScenes}/${total} valid (${(successRate * 100).toFixed(0)}%) — ${isGoodAnalysis ? 'GOOD' : 'FAILED, will retry'}`);
+        const freshEp = freshAll[freshSIdx].episodes[eIdx] || episode;
+        freshAll[freshSIdx].episodes[eIdx] = { ...freshEp, analyzed: true, deepAnalyzed: isGoodAnalysis, scenes, partialAnalysis: false };
+        saveSeries(freshAll);
+        mainWindow.webContents.send('series-analyze-progress', {
+          episodeCode, phase: 'episode-saved', analyzedCount: freshAll[freshSIdx].episodes.filter(ep => ep.analyzed).length, validScenes,
+        });
+      }
     }
 
     mainWindow.webContents.send('series-analyze-progress', { episodeCode, phase: 'done', cancelled });

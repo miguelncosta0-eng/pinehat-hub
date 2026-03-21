@@ -234,13 +234,14 @@
   flex-shrink: 0;
 }
 
-.idea-content { flex: 1; min-width: 0; }
+.idea-content { flex: 1; min-width: 0; user-select: text; cursor: text; }
 
 .idea-title {
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
   margin-bottom: 6px;
+  user-select: text;
 }
 
 .idea-hook {
@@ -248,6 +249,7 @@
   color: var(--text-dim);
   line-height: 1.6;
   margin-bottom: 10px;
+  user-select: text;
 }
 
 .idea-meta {
@@ -262,6 +264,7 @@
   padding: 2px 8px;
   border-radius: 4px;
   font-weight: 500;
+  user-select: text;
 }
 
 .idea-tag-angle {
@@ -280,4 +283,5 @@
   font-style: italic;
   padding-top: 4px;
   border-top: 1px solid var(--border);
+  user-select: text;
 }
