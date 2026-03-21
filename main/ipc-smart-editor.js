@@ -396,7 +396,9 @@ async function extractAssets(plan, series, tmpDir, onProgress) {
 
             // Concat clip + extension
             const concatFile = path.join(tmpDir, `concat_${idx}.txt`);
-            fs.writeFileSync(concatFile, `file '${outputPath.replace(/'/g, "'\\''")}'\\nfile '${extendPath.replace(/'/g, "'\\''")}'`);
+            const p1 = outputPath.replace(/\\/g, '/');
+            const p2 = extendPath.replace(/\\/g, '/');
+            fs.writeFileSync(concatFile, `file '${p1}'\nfile '${p2}'\n`);
             const mergedPath = path.join(tmpDir, `merged_${String(idx).padStart(5, '0')}.mp4`);
             await runFfmpeg(ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', concatFile, '-c', 'copy', mergedPath], null, 30000);
 
