@@ -66,16 +66,15 @@ function groupWordsIntoSegments(words) {
 
 // ── Build scene database for AI ──
 
-function buildSceneDatabase(series, maxPerEp = 5) {
+function buildSceneDatabase(series, maxPerEp = 3) {
   const lines = [];
   let totalScenes = 0;
-  const MAX_TOTAL = 100; // max 100 scenes total across all episodes
+  const MAX_TOTAL = 40; // keep prompt small
 
   for (const ep of (series.episodes || [])) {
     if (!ep.scenes || ep.scenes.length === 0) continue;
     if (totalScenes >= MAX_TOTAL) break;
 
-    // Pick evenly spaced scenes for variety
     const validScenes = ep.scenes.filter(s => s.description);
     const step = Math.max(1, Math.floor(validScenes.length / maxPerEp));
     const picked = [];
@@ -84,14 +83,12 @@ function buildSceneDatabase(series, maxPerEp = 5) {
     }
 
     if (picked.length === 0) continue;
-    lines.push(`${ep.code}:`);
-    for (const scene of picked) {
-      lines.push(`  [${scene.time}s]: ${scene.description.slice(0, 80)}`);
-      totalScenes++;
-    }
+    lines.push(`${ep.code}: ${picked.map(s => `[${s.time}s]${s.description.slice(0, 50)}`).join(' | ')}`);
+    totalScenes += picked.length;
   }
-  console.log(`[SmartEditor] Scene DB: ${totalScenes} scenes, ${lines.join('\n').length} chars`);
-  return lines.join('\n');
+  const result = lines.join('\n');
+  console.log(`[SmartEditor] Scene DB: ${totalScenes} scenes, ${result.length} chars`);
+  return result;
 }
 
 // ── AI Editorial Plan ──
@@ -168,12 +165,9 @@ JSON ARRAY:`;
       },
       body: JSON.stringify({
         model,
-        messages: [
-          { role: 'system', content: 'You are a video editor. Always respond with valid JSON arrays only. No markdown, no text, just the JSON array.' },
-          { role: 'user', content: prompt },
-        ],
-        max_tokens: 8000,
-        temperature: 0.3,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 4000,
+        temperature: 0.2,
       }),
     });
 
