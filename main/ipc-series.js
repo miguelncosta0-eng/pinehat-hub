@@ -275,10 +275,19 @@ function register(mainWindow) {
   ipcMain.handle('series-add', (_event, { name, folderPath }) => {
     const all = getSeries();
     const episodes = scanFolder(folderPath);
-    const s = { id: uuid(), name, folderPath, episodes, createdAt: new Date().toISOString() };
+    const s = { id: uuid(), name, folderPath, episodes, characters: [], createdAt: new Date().toISOString() };
     all.push(s);
     saveSeries(all);
     return s;
+  });
+
+  ipcMain.handle('series-update-characters', (_event, { seriesId, characters }) => {
+    const all = getSeries();
+    const idx = all.findIndex(s => s.id === seriesId);
+    if (idx === -1) return { success: false };
+    all[idx].characters = characters || [];
+    saveSeries(all);
+    return { success: true };
   });
 
   ipcMain.handle('series-remove', (_event, id) => {
@@ -444,6 +453,182 @@ function register(mainWindow) {
 
     mainWindow.webContents.send('series-analyze-progress', { episodeCode, phase: 'done', cancelled });
     return { success: !cancelled, scenes };
+  });
+
+  // ── Deep Analysis (10s intervals, batch vision, characters) ──
+  ipcMain.handle('series-deep-analyze-episode', async (_event, { seriesId, episodeCode }) => {
+    analysisCancelled = false;
+    const settings = getSettings();
+    if (!settings.elevateLabsApiKey) return { success: false, error: 'API key não configurada nas Definições' };
+
+    const all = getSeries();
+    const sIdx = all.findIndex(s => s.id === seriesId);
+    if (sIdx === -1) return { success: false, error: 'Série não encontrada' };
+
+    const series = all[sIdx];
+    const eIdx = series.episodes.findIndex(ep => ep.code === episodeCode);
+    if (eIdx === -1) return { success: false, error: 'Episódio não encontrado' };
+
+    const episode = series.episodes[eIdx];
+    if (!fs.existsSync(episode.filePath)) return { success: false, error: `Ficheiro não encontrado: ${episode.filePath}` };
+
+    mainWindow.webContents.send('series-analyze-progress', { episodeCode, phase: 'extracting', current: 0, total: 0 });
+
+    const duration = await getVideoDuration(episode.filePath);
+    const INTERVAL_SEC = 10; // 1 frame per 10 seconds
+    const timestamps = [];
+    for (let t = 10; t < duration - 10; t += INTERVAL_SEC) timestamps.push(Math.floor(t));
+    if (timestamps.length === 0) timestamps.push(10);
+    const total = timestamps.length; // no cap
+
+    const framesDir = path.join(FRAMES_DIR, seriesId, episodeCode);
+    if (!fs.existsSync(framesDir)) fs.mkdirSync(framesDir, { recursive: true });
+
+    const scenes = [];
+    const BATCH_SIZE = 4; // 4 frames per API call
+    const characters = (series.characters || []).join(', ') || 'não especificados';
+
+    for (let batchStart = 0; batchStart < total; batchStart += BATCH_SIZE) {
+      if (analysisCancelled) break;
+
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, total);
+      const batchTimestamps = timestamps.slice(batchStart, batchEnd);
+
+      mainWindow.webContents.send('series-analyze-progress', {
+        episodeCode, phase: 'analyzing', current: batchStart + 1, total,
+        timeSeconds: batchTimestamps[0],
+      });
+
+      // Extract frames for this batch
+      const frameData = [];
+      for (let j = 0; j < batchTimestamps.length; j++) {
+        const ts = batchTimestamps[j];
+        const framePath = path.join(framesDir, `frame_${String(batchStart + j).padStart(5, '0')}.jpg`);
+        try {
+          await extractFrameAt(episode.filePath, ts, framePath);
+          const base64 = fs.readFileSync(framePath).toString('base64');
+          frameData.push({ ts, base64 });
+          try { fs.unlinkSync(framePath); } catch (_) {}
+        } catch (err) {
+          console.error(`[DeepAnalysis] Frame extract failed @${ts}s: ${err.message}`);
+          scenes.push({ time: ts, description: '', characters: [], mood: 'unknown' });
+        }
+      }
+
+      if (frameData.length === 0) continue;
+
+      // Build multi-image message
+      const content = [];
+      for (const fd of frameData) {
+        content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${fd.base64}` } });
+      }
+
+      const timeLabels = frameData.map(fd => {
+        const m = Math.floor(fd.ts / 60);
+        const s = fd.ts % 60;
+        return `${m}:${String(s).padStart(2, '0')} (${fd.ts}s)`;
+      }).join(', ');
+
+      content.push({
+        type: 'text',
+        text: `${frameData.length} frames from "${series.name}" ${episodeCode} at timestamps: ${timeLabels}.
+Known characters: ${characters}.
+
+For EACH frame, describe in JSON format:
+- "description": 1-2 sentences describing characters (use their names), action, and setting
+- "characters": array of character names visible
+- "mood": one of "action", "dialogue", "quiet", "dramatic"
+
+Return ONLY a JSON array with ${frameData.length} objects, one per frame in order.`,
+      });
+
+      try {
+        const resp = await fetch(`${CHAT_BASE}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${settings.elevateLabsApiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4.5',
+            max_tokens: 800,
+            messages: [{ role: 'user', content }],
+          }),
+        });
+
+        if (!resp.ok) {
+          const errText = await resp.text();
+          console.error(`[DeepAnalysis] API error: ${resp.status} ${errText.slice(0, 200)}`);
+          for (const fd of frameData) {
+            scenes.push({ time: fd.ts, description: '', characters: [], mood: 'unknown' });
+          }
+          continue;
+        }
+
+        const data = await resp.json();
+        const rawContent = data.choices?.[0]?.message?.content || '';
+
+        // Parse JSON array from response
+        const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          try {
+            const items = JSON.parse(jsonMatch[0]);
+            for (let j = 0; j < frameData.length; j++) {
+              const item = items[j] || {};
+              scenes.push({
+                time: frameData[j].ts,
+                description: item.description || '',
+                characters: item.characters || [],
+                mood: item.mood || 'unknown',
+              });
+            }
+          } catch (parseErr) {
+            console.error(`[DeepAnalysis] JSON parse error: ${parseErr.message}`);
+            // Fallback: use raw text for first frame
+            for (const fd of frameData) {
+              scenes.push({ time: fd.ts, description: rawContent.slice(0, 200), characters: [], mood: 'unknown' });
+            }
+          }
+        } else {
+          // No JSON found, use raw text
+          for (let j = 0; j < frameData.length; j++) {
+            scenes.push({
+              time: frameData[j].ts,
+              description: j === 0 ? rawContent.slice(0, 200) : '',
+              characters: [],
+              mood: 'unknown',
+            });
+          }
+        }
+      } catch (err) {
+        console.error(`[DeepAnalysis] Batch error: ${err.message}`);
+        for (const fd of frameData) {
+          scenes.push({ time: fd.ts, description: '', characters: [], mood: 'unknown' });
+        }
+      }
+
+      // Small delay between batches to respect rate limits
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Clean up
+    try { fs.rmdirSync(framesDir); } catch (_) {}
+
+    const cancelled = analysisCancelled;
+    const validScenes = scenes.filter(s => s.description).length;
+    console.log(`[DeepAnalysis] ${episodeCode} done — ${scenes.length} frames, ${validScenes} with description`);
+
+    if (!cancelled) {
+      series.episodes[eIdx] = { ...episode, analyzed: true, deepAnalyzed: true, scenes };
+      all[sIdx] = series;
+      saveSeries(all);
+      mainWindow.webContents.send('series-analyze-progress', {
+        episodeCode, phase: 'episode-saved', analyzedCount: all[sIdx].episodes.filter(ep => ep.analyzed).length, validScenes,
+      });
+    }
+
+    mainWindow.webContents.send('series-analyze-progress', { episodeCode, phase: 'done', cancelled });
+    return { success: !cancelled, scenes, total: scenes.length, valid: validScenes };
   });
 
   // ── AI Clip Assignment ──

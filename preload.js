@@ -101,6 +101,8 @@ contextBridge.exposeInMainWorld('api', {
   seriesAnalyzeEpisode: (opts) => ipcRenderer.invoke('series-analyze-episode', opts),
   seriesCancelAnalysis: () => ipcRenderer.invoke('series-cancel-analysis'),
   seriesAssignClips: (opts) => ipcRenderer.invoke('series-assign-clips', opts),
+  seriesDeepAnalyze: (opts) => ipcRenderer.invoke('series-deep-analyze-episode', opts),
+  seriesUpdateCharacters: (opts) => ipcRenderer.invoke('series-update-characters', opts),
   seriesResetAnalysis: (id) => ipcRenderer.invoke('series-reset-analysis', id),
   seriesDiagnose: (id) => ipcRenderer.invoke('series-diagnose', id),
   seriesTraceOne: (id) => ipcRenderer.invoke('series-trace-one', id),
