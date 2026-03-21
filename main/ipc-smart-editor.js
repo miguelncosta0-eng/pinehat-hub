@@ -203,20 +203,21 @@ function scoreScene(scene, voText, mentionedChars, contextKeywords) {
 
   // ── DEFAULT TO PROTAGONISTS when no specific characters mentioned ──
   if (mentionedChars.length === 0) {
-    // Boost scenes showing main characters (Dipper/Mabel) as safe defaults
-    if (/dipper/i.test(descLow) && /mabel/i.test(descLow)) score += 8;
-    else if (/dipper/i.test(descLow) || /mabel/i.test(descLow)) score += 5;
-    // Penalize villain scenes when no specific character context
-    if (/bill cipher|gideon|triangle|demon|evil|menacing|ominous/i.test(descLow)) score -= 15;
+    // Strongly boost scenes showing main characters
+    if (/dipper/i.test(descLow) && /mabel/i.test(descLow)) score += 20;
+    else if (/dipper/i.test(descLow) || /mabel/i.test(descLow)) score += 12;
+    else if (/stan/i.test(descLow)) score += 8;
+    // Hard penalty for villain scenes when no character context
+    if (/bill cipher|gideon|triangle|demon|evil|menacing|ominous|sinister|cipher/i.test(descLow)) score -= 50;
   }
 
   // ── CONTEXTUAL PATTERNS ──
   const voLow = voText.toLowerCase();
 
-  // Extra penalty: if voiceover talks about kids/fun/solving mysteries, penalize villain scenes
-  if (/kid|child|fun|play|solving|bond|heart|together|friend|brother|sister|love/i.test(voLow)) {
-    if (/bill cipher|triangle|pyramid|demon|menacing|ominous|evil|villain|gideon/i.test(descLow)) {
-      score -= 25; // don't show villains when talking about positive/fun things
+  // Extra penalty: if voiceover talks about kids/fun/solving mysteries, HARD penalize villain scenes
+  if (/kid|child|fun|play|solving|bond|heart|together|friend|brother|sister|love|being kids|mysteries/i.test(voLow)) {
+    if (/bill cipher|triangle|pyramid|demon|menacing|ominous|evil|villain|gideon|sinister|cipher/i.test(descLow)) {
+      score -= 60; // never show villains when talking about positive/fun things
     }
   }
 
@@ -369,11 +370,12 @@ function generateEditorialPlan(segments, sceneDB, seriesName, characters, settin
     if (bestScenes.length === 0) continue;
 
     // Decide how many sub-segments to create for this voiceover segment
-    // Short segments (< 4s): 1 clip. Medium (4-8s): 2 clips. Long (> 8s): 3+ clips.
+    // Keep clips longer — min 4s each so they don't flash by too fast
+    // Short segments (< 5s): 1 clip. Medium (5-10s): 2 clips. Long (> 10s): 3+ clips.
     let subCount;
-    if (segDuration < 4) subCount = 1;
-    else if (segDuration < 8) subCount = 2;
-    else subCount = Math.ceil(segDuration / 4);
+    if (segDuration < 5) subCount = 1;
+    else if (segDuration < 10) subCount = 2;
+    else subCount = Math.ceil(segDuration / 5);
 
     const subDuration = segDuration / subCount;
     let t = seg.startTime;
