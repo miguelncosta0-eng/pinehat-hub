@@ -491,8 +491,9 @@ function register(mainWindow) {
     if (!fs.existsSync(framesDir)) fs.mkdirSync(framesDir, { recursive: true });
 
     const scenes = [];
-    const BATCH_SIZE = 4; // 4 frames per API call
-    const characters = (series.characters || []).join(', ') || 'não especificados';
+    const BATCH_SIZE = 2; // 2 frames per API call (less chance of rate limit)
+    const MAX_RETRIES = 3;
+    const characters = (series.characters || []).join(', ') || 'unknown';
 
     for (let batchStart = 0; batchStart < total; batchStart += BATCH_SIZE) {
       if (analysisCancelled) break;
@@ -529,92 +530,101 @@ function register(mainWindow) {
         content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${fd.base64}` } });
       }
 
-      const timeLabels = frameData.map(fd => {
-        const m = Math.floor(fd.ts / 60);
-        const s = fd.ts % 60;
-        return `${m}:${String(s).padStart(2, '0')} (${fd.ts}s)`;
-      }).join(', ');
+      const timeLabels = frameData.map(fd => `${Math.floor(fd.ts / 60)}:${String(fd.ts % 60).padStart(2, '0')}`).join(', ');
 
       content.push({
         type: 'text',
-        text: `${frameData.length} frames from "${series.name}" ${episodeCode} at timestamps: ${timeLabels}.
-Known characters: ${characters}.
-
-For EACH frame, describe in JSON format:
-- "description": 1-2 sentences describing characters (use their names), action, and setting
-- "characters": array of character names visible
-- "mood": one of "action", "dialogue", "quiet", "dramatic"
-
-Return ONLY a JSON array with ${frameData.length} objects, one per frame in order.`,
+        text: `Frames from "${series.name}" ${episodeCode} at ${timeLabels}. Characters: ${characters}. For each frame return JSON: [{"description":"1-2 sentences with character names","characters":["name"],"mood":"action|dialogue|quiet|dramatic"}]`,
       });
 
-      try {
-        const resp = await fetch(`${deepApiBase}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${deepApiKey}`,
-          },
-          body: JSON.stringify({
-            model: deepModel,
-            max_tokens: 800,
-            messages: [{ role: 'user', content }],
-          }),
-        });
-
-        if (!resp.ok) {
-          const errText = await resp.text();
-          console.error(`[DeepAnalysis] API error: ${resp.status} ${errText.slice(0, 200)}`);
-          for (const fd of frameData) {
-            scenes.push({ time: fd.ts, description: '', characters: [], mood: 'unknown' });
-          }
-          continue;
+      // Retry logic
+      let success = false;
+      for (let attempt = 0; attempt < MAX_RETRIES && !success; attempt++) {
+        if (attempt > 0) {
+          console.log(`[DeepAnalysis] Retry ${attempt}/${MAX_RETRIES} for batch @${batchTimestamps[0]}s`);
+          await new Promise(r => setTimeout(r, 3000 * attempt)); // exponential backoff
         }
 
-        const data = await resp.json();
-        const rawContent = data.choices?.[0]?.message?.content || '';
+        try {
+          const resp = await fetch(`${deepApiBase}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${deepApiKey}`,
+            },
+            body: JSON.stringify({
+              model: deepModel,
+              max_tokens: 500,
+              messages: [{ role: 'user', content }],
+            }),
+          });
 
-        // Parse JSON array from response
-        const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
-        if (jsonMatch) {
-          try {
-            const items = JSON.parse(jsonMatch[0]);
-            for (let j = 0; j < frameData.length; j++) {
-              const item = items[j] || {};
-              scenes.push({
-                time: frameData[j].ts,
-                description: item.description || '',
-                characters: item.characters || [],
-                mood: item.mood || 'unknown',
-              });
+          if (!resp.ok) {
+            const errText = await resp.text();
+            console.error(`[DeepAnalysis] API ${resp.status}: ${errText.slice(0, 150)}`);
+            if (resp.status === 429) {
+              // Rate limited — wait longer and retry
+              await new Promise(r => setTimeout(r, 5000));
+              continue;
             }
-          } catch (parseErr) {
-            console.error(`[DeepAnalysis] JSON parse error: ${parseErr.message}`);
-            // Fallback: use raw text for first frame
+            continue; // retry other errors too
+          }
+
+          const data = await resp.json();
+          const rawContent = data.choices?.[0]?.message?.content || '';
+
+          if (!rawContent) {
+            console.error(`[DeepAnalysis] Empty response for batch @${batchTimestamps[0]}s`);
+            continue; // retry
+          }
+
+          // Parse JSON
+          const jsonMatch = rawContent.match(/\[[\s\S]*\]/) || rawContent.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            let items;
+            try {
+              const parsed = JSON.parse(jsonMatch[0]);
+              items = Array.isArray(parsed) ? parsed : [parsed];
+            } catch (_) {
+              console.error(`[DeepAnalysis] JSON parse failed, using raw text`);
+              items = null;
+            }
+
+            if (items) {
+              for (let j = 0; j < frameData.length; j++) {
+                const item = items[j] || items[0] || {};
+                scenes.push({
+                  time: frameData[j].ts,
+                  description: item.description || rawContent.slice(0, 150),
+                  characters: item.characters || [],
+                  mood: item.mood || 'unknown',
+                });
+              }
+              success = true;
+            }
+          }
+
+          if (!success) {
+            // Use raw text as fallback
             for (const fd of frameData) {
-              scenes.push({ time: fd.ts, description: rawContent.slice(0, 200), characters: [], mood: 'unknown' });
+              scenes.push({ time: fd.ts, description: rawContent.slice(0, 150), characters: [], mood: 'unknown' });
             }
+            success = true; // don't retry, we got something
           }
-        } else {
-          // No JSON found, use raw text
-          for (let j = 0; j < frameData.length; j++) {
-            scenes.push({
-              time: frameData[j].ts,
-              description: j === 0 ? rawContent.slice(0, 200) : '',
-              characters: [],
-              mood: 'unknown',
-            });
-          }
+        } catch (err) {
+          console.error(`[DeepAnalysis] Batch error: ${err.message}`);
         }
-      } catch (err) {
-        console.error(`[DeepAnalysis] Batch error: ${err.message}`);
+      }
+
+      // If all retries failed, push empty scenes
+      if (!success) {
         for (const fd of frameData) {
           scenes.push({ time: fd.ts, description: '', characters: [], mood: 'unknown' });
         }
       }
 
-      // Delay between batches to respect rate limits (longer for OpenAI)
-      await new Promise(r => setTimeout(r, useOpenAI ? 1500 : 500));
+      // Delay between batches
+      await new Promise(r => setTimeout(r, useOpenAI ? 2000 : 500));
     }
 
     // Clean up
