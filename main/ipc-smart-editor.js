@@ -244,17 +244,69 @@ async function generateEditorialPlan(segments, allScenes, seriesName, characters
     const batchText = batchSegs.map(s => s.text).join(' ');
     const segList = batchSegs.map((s, i) => `${i}: [${s.startTime.toFixed(1)}s-${s.endTime.toFixed(1)}s] "${s.text}"`).join('\n');
 
-    // Find most relevant scenes for THIS batch's voiceover content
-    // Exclude scenes already used in previous batches
+    // Two-phase scene selection:
+    // 1. Score ALL scenes and get top 150
+    // 2. Group by episode and include FULL scene lists for top episodes
     const usedSceneKeys = new Set(allItems.map(it => `${it.episode}@${it.sceneTime}`));
-    const relevantScenes = findRelevantScenes(
-      allScenes.filter(s => !usedSceneKeys.has(`${s.episode}@${s.time}`)),
-      batchText, 80, charAliases
-    );
+    const unusedScenes = allScenes.filter(s => !usedSceneKeys.has(`${s.episode}@${s.time}`));
 
-    // Build list of already used scenes to tell AI
+    // Score all scenes
+    const textLower = batchText.toLowerCase();
+    const mentionedChars = new Set();
+    for (const [alias, fullName] of Object.entries(charAliases)) {
+      if (textLower.includes(alias)) mentionedChars.add(fullName);
+    }
+
+    // Find top episodes by counting how many of their scenes match
+    const episodeScores = {};
+    for (const scene of unusedScenes) {
+      if (!episodeScores[scene.episode]) episodeScores[scene.episode] = { score: 0, scenes: [] };
+      episodeScores[scene.episode].scenes.push(scene);
+
+      const descLower = scene.description.toLowerCase();
+      const charNames = (scene.characters || []).map(c => c.toLowerCase());
+
+      let score = 0;
+      for (const charName of charNames) {
+        if (mentionedChars.has(charName) || mentionedChars.has(charName.split(' ')[0])) score += 5;
+      }
+      for (const word of textLower.split(/\s+/).filter(w => w.length > 3)) {
+        if (descLower.includes(word)) score += 1;
+      }
+      episodeScores[scene.episode].score += score;
+    }
+
+    // Pick top 5 episodes, include ALL their scenes (up to 30 each)
+    const topEpisodes = Object.entries(episodeScores)
+      .sort(([,a], [,b]) => b.score - a.score)
+      .slice(0, 5);
+
+    let relevantScenes = '';
+    let sceneCount = 0;
+    for (const [epCode, data] of topEpisodes) {
+      const epScenes = data.scenes.slice(0, 30);
+      relevantScenes += `\n--- ${epCode} ---\n`;
+      for (const s of epScenes) {
+        const chars = s.characters?.length ? ` [${s.characters.join(',')}]` : '';
+        relevantScenes += `${epCode}@${s.time}s${chars}: ${s.description.slice(0, 180)}\n`;
+        sceneCount++;
+      }
+    }
+
+    // Also add top 20 scenes from other episodes (variety)
+    const topEpCodes = new Set(topEpisodes.map(([code]) => code));
+    const otherScenes = findRelevantScenes(
+      unusedScenes.filter(s => !topEpCodes.has(s.episode)),
+      batchText, 20, charAliases
+    );
+    if (otherScenes) {
+      relevantScenes += `\n--- OTHER EPISODES ---\n${otherScenes}\n`;
+    }
+
+    console.log(`[SmartEditor] Batch ${b + 1}: ${sceneCount} scenes from ${topEpisodes.length} episodes + extras`);
+
     const usedList = allItems.length > 0
-      ? `\nALREADY USED (do NOT reuse these):\n${[...usedSceneKeys].slice(-20).join(', ')}\n`
+      ? `\nALREADY USED (do NOT reuse):\n${[...usedSceneKeys].slice(-15).join(', ')}\n`
       : '';
 
     const prompt = `You are an expert YouTube video editor. Create B-Roll for "${seriesName}".
