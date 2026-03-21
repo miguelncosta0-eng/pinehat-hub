@@ -194,9 +194,20 @@ function scoreScene(scene, voText, mentionedChars, contextKeywords) {
     if (!anyInDesc) score -= 10; // penalty for scenes without the mentioned character in description
   }
 
-  // ── KEYWORD MATCHING ──
+  // ── KEYWORD MATCHING (low weight — prevents generic keywords from dominating) ──
   for (const kw of contextKeywords) {
-    if (descLow.includes(kw)) score += 3;
+    // Skip generic location words that match too many scenes
+    if (/mystery|shack|room|house|town|forest|outside|inside|scene|frame|appear/i.test(kw)) continue;
+    if (descLow.includes(kw)) score += 2;
+  }
+
+  // ── DEFAULT TO PROTAGONISTS when no specific characters mentioned ──
+  if (mentionedChars.length === 0) {
+    // Boost scenes showing main characters (Dipper/Mabel) as safe defaults
+    if (/dipper/i.test(descLow) && /mabel/i.test(descLow)) score += 8;
+    else if (/dipper/i.test(descLow) || /mabel/i.test(descLow)) score += 5;
+    // Penalize villain scenes when no specific character context
+    if (/bill cipher|gideon|triangle|demon|evil|menacing|ominous/i.test(descLow)) score -= 15;
   }
 
   // ── CONTEXTUAL PATTERNS ──
