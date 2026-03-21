@@ -186,13 +186,6 @@ function scoreScene(scene, voText, mentionedChars, contextKeywords) {
     if (!anyMatch) score -= 15; // strong penalty for wrong characters
   }
 
-  // Extra penalty: if voiceover talks about kids/fun/solving mysteries and scene shows villains
-  if (/kid|child|fun|play|mystery|solving|bond|heart|together/i.test(voLow)) {
-    if (scene.chars.some(c => /bill|cipher|gideon|ghost|monster|demon/i.test(c))) {
-      score -= 20; // don't show villains when talking about fun/kids
-    }
-  }
-
   // ── KEYWORD MATCHING ──
   for (const kw of contextKeywords) {
     if (descLow.includes(kw)) score += 3;
@@ -200,6 +193,13 @@ function scoreScene(scene, voText, mentionedChars, contextKeywords) {
 
   // ── CONTEXTUAL PATTERNS ──
   const voLow = voText.toLowerCase();
+
+  // Extra penalty: if voiceover talks about kids/fun/solving mysteries and scene shows villains
+  if (/kid|child|fun|play|mystery|solving|bond|heart|together/i.test(voLow)) {
+    if (scene.chars.some(c => /bill|cipher|gideon|ghost|monster|demon/i.test(c))) {
+      score -= 20; // don't show villains when talking about fun/kids
+    }
+  }
   // Objects & places
   if (/journal|diário|diary|book|livro/i.test(voLow) && /journal|book|diary|red book|gold|hand symbol/i.test(descLow)) score += 12;
   if (/portal|máquina|machine/i.test(voLow) && /portal|machine|glow|basement|device/i.test(descLow)) score += 12;
