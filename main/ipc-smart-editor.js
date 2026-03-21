@@ -144,6 +144,8 @@ RULES:
 
 JSON ARRAY:`;
 
+    console.log(`[SmartEditor] Prompt length: ${prompt.length} chars, model: ${model}`);
+
     const response = await fetch(`${CHAT_BASE}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -152,7 +154,10 @@ JSON ARRAY:`;
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: 'user', content: prompt }],
+        messages: [
+          { role: 'system', content: 'You are a video editor. Always respond with valid JSON arrays only. No markdown, no text, just the JSON array.' },
+          { role: 'user', content: prompt },
+        ],
         max_tokens: 8000,
         temperature: 0.3,
       }),
@@ -164,8 +169,18 @@ JSON ARRAY:`;
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '';
-    console.log(`[SmartEditor] Batch ${b + 1} response (${content.length} chars):`, content.slice(0, 300));
+    console.log(`[SmartEditor] Batch ${b + 1} raw response:`, JSON.stringify(data).slice(0, 500));
+    const content = data.choices?.[0]?.message?.content || data.choices?.[0]?.text || '';
+    console.log(`[SmartEditor] Batch ${b + 1} content (${content.length} chars):`, content.slice(0, 300));
+
+    // Check for empty response — might be rate limit or content filter
+    if (!content) {
+      const reason = data.choices?.[0]?.finish_reason || 'unknown';
+      const errMsg = data.error?.message || '';
+      console.error(`[SmartEditor] Empty response. Reason: ${reason}, Error: ${errMsg}`);
+      console.error(`[SmartEditor] Full response:`, JSON.stringify(data));
+      throw new Error(`AI devolveu resposta vazia (${reason}). ${errMsg ? 'Erro: ' + errMsg : 'Tenta novamente.'}`);
+    }
 
     // Parse JSON from response — handle markdown code blocks, raw JSON, etc.
     let jsonStr = null;
