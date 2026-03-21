@@ -5,9 +5,11 @@ const { spawn } = require('child_process');
 const { DATA_DIR, readJson, writeJson, uuid, ensureDataDir } = require('./ipc-data');
 const { getSettings } = require('./ipc-settings');
 const { CHAT_BASE } = require('./elevate-api');
+const { findBinary, runFfmpeg, probeDuration } = require('./whisper-utils');
 
 const SERIES_FILE = path.join(DATA_DIR, 'series.json');
 const FRAMES_DIR  = path.join(DATA_DIR, 'series_frames');
+const TRANSCRIPTS_DIR = path.join(DATA_DIR, 'series_transcripts');
 
 const VIDEO_EXTS = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v'];
 const EP_REGEX   = /[Ss](\d{1,2})[Ee](\d{1,2})/;
@@ -821,6 +823,173 @@ Use only episode codes and timestamps that exist in the database above. No expla
     }
 
     return { success: true, assignments: allAssignments };
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // EPISODE TRANSCRIPTION (Whisper API)
+  // ═══════════════════════════════════════════════════════════
+
+  ipcMain.handle('series-transcribe-all', async (_event, { seriesId }) => {
+    const settings = getSettings();
+    if (!settings.openaiApiKey) return { success: false, error: 'OpenAI API key não configurada nas Definições.' };
+
+    const data = getSeries();
+    const series = data.series.find(s => s.id === seriesId);
+    if (!series) return { success: false, error: 'Série não encontrada.' };
+
+    if (!fs.existsSync(TRANSCRIPTS_DIR)) fs.mkdirSync(TRANSCRIPTS_DIR, { recursive: true });
+
+    const episodes = series.episodes || [];
+    let completed = 0;
+    let failed = 0;
+
+    for (const ep of episodes) {
+      if (analysisCancelled) break;
+
+      // Skip if already transcribed
+      const transcriptPath = path.join(TRANSCRIPTS_DIR, `${seriesId}_${ep.code}.json`);
+      if (fs.existsSync(transcriptPath)) {
+        completed++;
+        mainWindow.webContents.send('series-analyze-progress', {
+          episodeCode: ep.code, phase: 'transcribing',
+          current: completed, total: episodes.length,
+          detail: `${ep.code}: já transcrito ✓`,
+        });
+        continue;
+      }
+
+      if (!ep.filePath || !fs.existsSync(ep.filePath)) {
+        failed++;
+        continue;
+      }
+
+      mainWindow.webContents.send('series-analyze-progress', {
+        episodeCode: ep.code, phase: 'transcribing',
+        current: completed + 1, total: episodes.length,
+        detail: `A transcrever ${ep.code}...`,
+      });
+
+      try {
+        // Extract audio from video as mp3 (small file for API)
+        const tmpDir = path.join(require('os').tmpdir(), `pinehat-transcript-${Date.now()}`);
+        fs.mkdirSync(tmpDir, { recursive: true });
+
+        const duration = await probeDuration(ep.filePath);
+        const ffmpegPath = findBinary('ffmpeg');
+
+        // Split into 20-min chunks for Whisper API (25MB limit)
+        const chunkDuration = 20 * 60;
+        const numChunks = Math.ceil(duration / chunkDuration);
+        const allWords = [];
+        let fullText = '';
+
+        for (let c = 0; c < numChunks; c++) {
+          const startSec = c * chunkDuration;
+          const chunkPath = path.join(tmpDir, `chunk_${c}.mp3`);
+
+          // Extract audio chunk
+          await runFfmpeg(ffmpegPath, [
+            '-y', '-i', ep.filePath, '-ss', String(startSec), '-t', String(chunkDuration),
+            '-ac', '1', '-ab', '64k', '-ar', '16000', '-vn', chunkPath,
+          ], null, 300000);
+
+          if (!fs.existsSync(chunkPath)) continue;
+
+          // Transcribe with OpenAI Whisper API
+          const audioBuffer = fs.readFileSync(chunkPath);
+          const audioBlob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+          const formData = new FormData();
+          formData.append('file', audioBlob, `${ep.code}_chunk${c}.mp3`);
+          formData.append('model', 'whisper-1');
+          formData.append('response_format', 'verbose_json');
+          formData.append('timestamp_granularities[]', 'word');
+          formData.append('timestamp_granularities[]', 'segment');
+
+          const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${settings.openaiApiKey}` },
+            body: formData,
+          });
+
+          if (!resp.ok) {
+            const err = await resp.text();
+            console.error(`[Transcribe] ${ep.code} chunk ${c} failed: ${resp.status} ${err.slice(0, 200)}`);
+            continue;
+          }
+
+          const result = await resp.json();
+
+          // Offset timestamps for chunks beyond the first
+          if (result.words) {
+            for (const w of result.words) {
+              allWords.push({
+                word: w.word,
+                start: (w.start || 0) + startSec,
+                end: (w.end || 0) + startSec,
+              });
+            }
+          }
+
+          // Collect segments with timestamps
+          if (result.segments) {
+            for (const seg of result.segments) {
+              fullText += (seg.text || '') + ' ';
+            }
+          } else if (result.text) {
+            fullText += result.text + ' ';
+          }
+
+          // Clean up chunk
+          try { fs.unlinkSync(chunkPath); } catch (_) {}
+
+          mainWindow.webContents.send('series-analyze-progress', {
+            episodeCode: ep.code, phase: 'transcribing',
+            current: completed + 1, total: episodes.length,
+            detail: `${ep.code}: chunk ${c + 1}/${numChunks}...`,
+          });
+
+          // Small delay between chunks
+          await new Promise(r => setTimeout(r, 500));
+        }
+
+        // Save transcript
+        const transcript = {
+          episodeCode: ep.code,
+          seriesId,
+          words: allWords,
+          fullText: fullText.trim(),
+          duration,
+          transcribedAt: new Date().toISOString(),
+        };
+
+        fs.writeFileSync(transcriptPath, JSON.stringify(transcript), 'utf8');
+        completed++;
+
+        // Clean up tmp dir
+        try { fs.rmdirSync(tmpDir, { recursive: true }); } catch (_) {}
+
+        console.log(`[Transcribe] ${ep.code} done: ${allWords.length} words, ${fullText.length} chars`);
+
+        mainWindow.webContents.send('series-analyze-progress', {
+          episodeCode: ep.code, phase: 'transcribing',
+          current: completed, total: episodes.length,
+          detail: `${ep.code}: ✓ ${allWords.length} palavras`,
+        });
+
+        // Delay between episodes
+        await new Promise(r => setTimeout(r, 1000));
+
+      } catch (err) {
+        console.error(`[Transcribe] ${ep.code} error:`, err.message);
+        failed++;
+      }
+    }
+
+    mainWindow.webContents.send('series-analyze-progress', {
+      phase: 'transcribe-done', completed, failed, total: episodes.length,
+    });
+
+    return { success: true, completed, failed };
   });
 }
 

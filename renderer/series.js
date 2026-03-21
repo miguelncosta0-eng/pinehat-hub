@@ -97,6 +97,9 @@ Hub._renderSeriesDetail = async function (panel, seriesId) {
         <button class="btn btn-primary btn-small" id="seriesDeepAnalyzeBtn" ${analyzing ? 'disabled' : ''} style="background:#059669;">
           ${analyzing ? '<span class="spinner"></span> A analisar...' : '🔬 Análise Profunda'}
         </button>
+        <button class="btn btn-primary btn-small" id="seriesTranscribeBtn" ${analyzing ? 'disabled' : ''} style="background:#7c3aed;">
+          🎤 Transcrever Episódios
+        </button>
       </div>
     </div>
 
@@ -158,6 +161,16 @@ Hub._renderSeriesDetail = async function (panel, seriesId) {
 
   panel.querySelector('#seriesDeepAnalyzeBtn')?.addEventListener('click', () => {
     Hub._seriesDeepAnalyzeAll(seriesId, series.episodes, false); // only missing
+  });
+
+  panel.querySelector('#seriesTranscribeBtn')?.addEventListener('click', async () => {
+    Hub.showToast('A transcrever episódios com Whisper API...');
+    const result = await window.api.seriesTranscribeAll({ seriesId });
+    if (result.success) {
+      Hub.showToast(`Transcrição completa! ${result.completed} episódios, ${result.failed} falhas.`);
+    } else {
+      Hub.showToast(result.error || 'Erro na transcrição', 'error');
+    }
   });
 
   panel.querySelector('#seriesSaveCharacters')?.addEventListener('click', async () => {
