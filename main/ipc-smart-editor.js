@@ -288,213 +288,77 @@ function buildEpisodeContext(episodeSummaries, relevantEpisodes) {
   return lines.join('\n');
 }
 
-// ── AI Planning — the brain of the Smart Editor ──
+// ── Direct Scene Assignment — no AI needed for scene selection ──
+// The scoring system already picks the right scenes. The AI was the bottleneck.
 
-async function generateEditorialPlan(segments, sceneDB, seriesName, characters, settings, onProgress) {
+function generateEditorialPlan(segments, sceneDB, seriesName, characters, settings, onProgress) {
   const charAliases = buildCharAliases(characters);
-  const charactersList = (characters || []).join(', ') || 'unknown';
-
-  // Choose API — prefer OpenAI, fallback to Elevate Labs
-  const openaiKey = settings.openaiApiKey;
-  const elevateKey = settings.elevateLabsApiKey;
-
-  let apiBase, apiKey, model;
-  if (openaiKey) {
-    apiBase = 'https://api.openai.com/v1';
-    apiKey = openaiKey;
-    model = 'gpt-4o-mini'; // cheaper but great at JSON
-  } else if (elevateKey) {
-    apiBase = CHAT_BASE;
-    apiKey = elevateKey;
-    model = 'gemini-2.5-flash'; // fast and cheap on Elevate
-  } else {
-    throw new Error('Nenhuma API configurada. Configura OpenAI ou Elevate Labs nas Definições.');
-  }
-  console.log(`[SmartEditor] Planning with ${openaiKey ? 'OpenAI (gpt-4o-mini)' : 'Elevate Labs (' + model + ')'}`);
-
-  // Batch segments — max 90 seconds per batch for better precision
-  const batches = [];
-  let batch = [];
-  let batchDuration = 0;
-
-  for (const seg of segments) {
-    const dur = seg.endTime - seg.startTime;
-    if (batchDuration + dur > 90 && batch.length > 0) {
-      batches.push(batch);
-      batch = [];
-      batchDuration = 0;
-    }
-    batch.push(seg);
-    batchDuration += dur;
-  }
-  if (batch.length > 0) batches.push(batch);
-
-  console.log(`[SmartEditor] ${batches.length} batches from ${segments.length} segments`);
-
-  const allItems = [];
   const usedSceneIds = new Set();
+  const allItems = [];
+  const effects = ['zoom_in', 'zoom_out', 'pan_left', 'pan_right'];
 
-  for (let b = 0; b < batches.length; b++) {
+  console.log(`[SmartEditor] Direct planning for ${segments.length} segments`);
+
+  for (let i = 0; i < segments.length; i++) {
     if (cancelled) throw new Error('Cancelado');
+
+    const seg = segments[i];
+    const segDuration = seg.endTime - seg.startTime;
+    if (segDuration < 0.5) continue;
 
     onProgress({
       phase: 'planning',
-      percent: Math.round((b / batches.length) * 100),
-      detail: `A planear ${b + 1}/${batches.length}...`,
+      percent: Math.round((i / segments.length) * 100),
+      detail: `A planear segmento ${i + 1}/${segments.length}...`,
     });
 
-    const batchSegs = batches[b];
-    const batchText = batchSegs.map(s => s.text).join(' ');
-    const batchStart = batchSegs[0].startTime;
-    const batchEnd = batchSegs[batchSegs.length - 1].endTime;
-
-    // Find best matching scenes for this batch
+    // Find best scenes for THIS specific segment
     const bestScenes = findBestScenes(
       sceneDB.scenes, sceneDB.episodeSummaries,
-      batchText, charAliases, usedSceneIds, 80
+      seg.text, charAliases, usedSceneIds, 30
     );
 
-    if (bestScenes.length === 0) {
-      console.warn(`[SmartEditor] No relevant scenes for batch ${b + 1}, using random`);
-      continue;
+    if (bestScenes.length === 0) continue;
+
+    // Decide how many sub-segments to create for this voiceover segment
+    // Short segments (< 4s): 1 clip. Medium (4-8s): 2 clips. Long (> 8s): 3+ clips.
+    let subCount;
+    if (segDuration < 4) subCount = 1;
+    else if (segDuration < 8) subCount = 2;
+    else subCount = Math.ceil(segDuration / 4);
+
+    const subDuration = segDuration / subCount;
+    let t = seg.startTime;
+
+    for (let j = 0; j < subCount && j < bestScenes.length; j++) {
+      const scene = bestScenes[j];
+      const subEnd = Math.min(t + subDuration, seg.endTime);
+      const dur = subEnd - t;
+      if (dur < 1) break;
+
+      // Alternate video_clip and still_frame
+      // First sub-segment: video (shows the action)
+      // Subsequent: alternate still/video
+      const isVideo = j === 0 || j % 3 === 0;
+
+      allItems.push({
+        startTime: t,
+        endTime: subEnd,
+        type: isVideo ? 'video_clip' : 'still_frame',
+        episode: scene.episode,
+        sceneTime: scene.time,
+        effect: effects[(allItems.length) % 4],
+        clipDuration: isVideo ? Math.min(5, dur) : 0,
+        _score: scene.score,
+        _desc: scene.desc.slice(0, 80),
+      });
+
+      usedSceneIds.add(scene.id);
+      t = subEnd;
     }
-
-    // Get relevant episodes for context
-    const relevantEps = [...new Set(bestScenes.map(s => s.episode))].slice(0, 10);
-    const epContext = buildEpisodeContext(sceneDB.episodeSummaries, relevantEps);
-
-    const segList = batchSegs.map((s, i) =>
-      `[${s.startTime.toFixed(1)}s → ${s.endTime.toFixed(1)}s] "${s.text}"`
-    ).join('\n');
-
-    const sceneList = formatScenesForPrompt(bestScenes.slice(0, 60));
-
-    const prompt = `You are a professional video editor creating B-Roll for a YouTube video about "${seriesName}".
-Characters: ${charactersList}
-
-EPISODE CONTEXT:
-${epContext}
-
-VOICEOVER (${batchStart.toFixed(1)}s → ${batchEnd.toFixed(1)}s):
-${segList}
-
-AVAILABLE SCENES (ranked by relevance):
-${sceneList}
-
-OUTPUT: JSON array. Each object:
-{"startTime":N,"endTime":N,"type":"video"|"still","ep":"S01E01","t":N,"fx":"zi"|"zo"|"pl"|"pr"}
-
-RULES:
-1. MATCH the visual to what is SAID. If narration says "Stan" → show a scene with Stan, NOT Dipper or Mabel.
-2. ep = episode code, t = scene timestamp (from the list above). ONLY use scenes from the list.
-3. video = 3-5s moving clip. still = frozen frame with zoom/pan effect (zi=zoom in, zo=zoom out, pl=pan left, pr=pan right).
-4. Alternate: video → still → video → still. But allow 2 videos in a row if it's action.
-5. Cover ${batchStart.toFixed(1)}s to ${batchEnd.toFixed(1)}s fully. NO GAPS. Each segment: 3-8 seconds.
-6. NEVER repeat the same ep@t combination.
-7. When narration describes something emotional/slow → use still frames. Action/movement → use video clips.
-
-JSON:`;
-
-    // Call AI with retry
-    let items = null;
-    for (let attempt = 0; attempt < 3 && !items; attempt++) {
-      if (attempt > 0) {
-        console.log(`[SmartEditor] Retry ${attempt} for batch ${b + 1}`);
-        await new Promise(r => setTimeout(r, 2000 * attempt));
-      }
-
-      try {
-        const resp = await fetch(`${apiBase}/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model,
-            messages: [{ role: 'user', content: prompt }],
-            max_tokens: 4000,
-            temperature: 0.1,
-          }),
-        });
-
-        if (!resp.ok) {
-          const errText = await resp.text();
-          console.error(`[SmartEditor] API ${resp.status}: ${errText.slice(0, 200)}`);
-          if (resp.status === 429) {
-            // Rate limited — try other API
-            if (apiBase === 'https://api.openai.com/v1' && elevateKey) {
-              console.log('[SmartEditor] OpenAI rate limited, switching to Elevate Labs');
-              apiBase = CHAT_BASE; apiKey = elevateKey; model = 'gemini-2.5-flash';
-            }
-            await new Promise(r => setTimeout(r, 5000));
-          }
-          continue;
-        }
-
-        const data = await resp.json();
-        const content = data.choices?.[0]?.message?.content || '';
-
-        if (!content) {
-          console.error(`[SmartEditor] Empty response batch ${b + 1}:`, JSON.stringify(data).slice(0, 300));
-          continue;
-        }
-
-        // Parse JSON — handle markdown blocks, raw arrays, etc.
-        const jsonStr = content.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/)?.[1]
-          || content.match(/\[[\s\S]*\]/)?.[0];
-
-        if (!jsonStr) {
-          console.error(`[SmartEditor] No JSON in batch ${b + 1}:`, content.slice(0, 300));
-          continue;
-        }
-
-        const parsed = JSON.parse(jsonStr);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          items = parsed;
-        }
-      } catch (err) {
-        console.error(`[SmartEditor] Batch ${b + 1} error: ${err.message}`);
-      }
-    }
-
-    if (!items) {
-      console.warn(`[SmartEditor] Batch ${b + 1} failed after retries, generating fallback`);
-      // Fallback: create segments from best scenes directly
-      let t = batchStart;
-      for (let i = 0; i < bestScenes.length && t < batchEnd; i++) {
-        const s = bestScenes[i];
-        const dur = Math.min(5, batchEnd - t);
-        if (dur < 1) break;
-        items = items || [];
-        items.push({
-          startTime: t,
-          endTime: t + dur,
-          type: i % 2 === 0 ? 'video' : 'still',
-          ep: s.episode,
-          t: s.time,
-          fx: ['zi', 'zo', 'pl', 'pr'][i % 4],
-        });
-        t += dur;
-      }
-      if (!items) items = [];
-    }
-
-    // Normalize items to full format and track used scenes
-    for (const item of items) {
-      const normalized = {
-        startTime: parseFloat(item.startTime) || batchStart,
-        endTime: parseFloat(item.endTime) || batchStart + 5,
-        type: (item.type === 'still' || item.type === 'still_frame') ? 'still_frame' : 'video_clip',
-        episode: item.ep || item.episode || bestScenes[0]?.episode || 'S01E01',
-        sceneTime: parseInt(item.t || item.sceneTime) || 0,
-        effect: { zi: 'zoom_in', zo: 'zoom_out', pl: 'pan_left', pr: 'pan_right' }[item.fx] || item.effect || 'zoom_in',
-        clipDuration: 5,
-      };
-      allItems.push(normalized);
-      usedSceneIds.add(`${normalized.episode}@${normalized.sceneTime}`);
-    }
-
-    console.log(`[SmartEditor] Batch ${b + 1}: ${items.length} items`);
   }
 
+  console.log(`[SmartEditor] Direct plan: ${allItems.length} items from ${segments.length} segments`);
   return allItems;
 }
 
@@ -889,8 +753,8 @@ function register(mainWindow) {
 
       const sceneDB = buildSceneDB(seriesToSearch);
 
-      // Step 4: AI Plan
-      const plan = await generateEditorialPlan(
+      // Step 4: Direct Plan (no AI needed — scoring assigns scenes directly)
+      const plan = generateEditorialPlan(
         segments, sceneDB, seriesName, combined.characters, settings,
         (p) => send({ phase: 'planning', percent: 20 + Math.round(p.percent * 0.30), detail: p.detail }),
       );
@@ -910,8 +774,10 @@ function register(mainWindow) {
       const debugLog = path.join(SMART_DIR, `${planId}_debug.txt`);
       const debugLines = validPlan.map((item, i) => {
         const seg = segments.find(s => s.startTime <= item.startTime && s.endTime >= item.startTime);
-        const voText = seg ? seg.text.slice(0, 60) : '(gap filler)';
-        return `${i}: [${item.startTime.toFixed(1)}-${item.endTime.toFixed(1)}s] ${item.type} ${item.episode}@${item.sceneTime}s | VO: "${voText}"`;
+        const voText = seg ? seg.text.slice(0, 50) : '(gap filler)';
+        const desc = item._desc || '';
+        const score = item._score || 0;
+        return `${i}: [${item.startTime.toFixed(1)}-${item.endTime.toFixed(1)}s] ${item.type} ${item.episode}@${item.sceneTime}s (${score}pts) | VO: "${voText}" | Scene: "${desc}"`;
       });
       fs.writeFileSync(debugLog, debugLines.join('\n'), 'utf8');
       console.log(`[SmartEditor] Debug log saved: ${debugLog}`);
