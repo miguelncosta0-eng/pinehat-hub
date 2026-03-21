@@ -299,27 +299,31 @@ Hub._seriesDeepAnalyzeNext = async function (seriesId) {
 Hub._seriesAnalysisProgress = function (data) {
   // Update gen-bar even when not on series page (background analysis)
   const bar = document.getElementById('genBar');
+  const barPhase = document.getElementById('genBarPhase');
+  const barFill = document.getElementById('genBarFill');
+  const barPct = document.getElementById('genBarPercent');
+
   if (bar && data.phase === 'analyzing') {
     bar.classList.add('visible');
-    const phase = bar.querySelector('.gen-phase');
-    const fill = bar.querySelector('.gen-fill');
-    const pct = bar.querySelector('.gen-percent');
-    if (phase) phase.textContent = `Análise ${data.episodeCode}: Frame ${data.current}/${data.total}`;
+    if (barPhase) barPhase.textContent = `Análise ${data.episodeCode}: Frame ${data.current}/${data.total}`;
     const pctVal = Math.round((data.current / data.total) * 100);
-    if (fill) fill.style.width = `${pctVal}%`;
-    if (pct) pct.textContent = `${pctVal}%`;
+    if (barFill) barFill.style.width = `${pctVal}%`;
+    if (barPct) barPct.textContent = `${pctVal}%`;
   } else if (bar && data.phase === 'deep-all-episode') {
     bar.classList.add('visible');
-    const phase = bar.querySelector('.gen-phase');
-    if (phase) phase.textContent = `Análise profunda: ${data.episodeCode} (${data.current}/${data.total})`;
-  } else if (bar && (data.phase === 'deep-all-done' || data.phase === 'episode-saved')) {
-    if (data.phase === 'deep-all-done') {
-      bar.classList.remove('visible');
-      Hub._seriesCurrentAnalysis = null;
-      Hub._seriesDeepMode = false;
-      Hub.showToast(`Análise profunda concluída! ${data.completed}/${data.total} episódios`);
-      if (Hub.state.activeSection === 'series') Hub.renderSeries();
-    }
+    if (barPhase) barPhase.textContent = `Análise profunda: ${data.episodeCode} (${data.current}/${data.total})`;
+    if (barFill) barFill.style.width = '0%';
+    if (barPct) barPct.textContent = '0%';
+  } else if (bar && data.phase === 'episode-saved') {
+    if (barPhase) barPhase.textContent = `${data.episodeCode}: ✓ ${data.validScenes} cenas`;
+    if (barFill) barFill.style.width = '100%';
+    if (barPct) barPct.textContent = '100%';
+  } else if (bar && data.phase === 'deep-all-done') {
+    bar.classList.remove('visible');
+    Hub._seriesCurrentAnalysis = null;
+    Hub._seriesDeepMode = false;
+    Hub.showToast(`Análise profunda concluída! ${data.completed}/${data.total} episódios`);
+    if (Hub.state.activeSection === 'series') Hub.renderSeries();
   }
 
   // Only update series-specific DOM if on series page
