@@ -384,7 +384,6 @@ JSON:`;
     console.log(`[SmartEditor] Prompt length: ${prompt.length} chars`);
 
     // Use OpenAI API for planning (more reliable, no daily token limit)
-    const openaiKey = settings.openaiApiKey;
     const planApiBase = openaiKey ? 'https://api.openai.com/v1' : CHAT_BASE;
     const planApiKey = openaiKey || apiKey;
     const planModel = openaiKey ? 'gpt-4o' : 'gemini-2.5-pro';
