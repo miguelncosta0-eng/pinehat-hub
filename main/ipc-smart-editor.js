@@ -88,10 +88,42 @@ function buildFullSceneDatabase(seriesList) {
   return allScenes;
 }
 
+// Build character aliases for better matching
+function buildCharacterAliases(characters) {
+  const aliases = {};
+  for (const name of (characters || [])) {
+    const lower = name.toLowerCase();
+    const parts = lower.split(/\s+/);
+    // Full name
+    aliases[lower] = lower;
+    // First name only
+    if (parts[0].length > 2) aliases[parts[0]] = lower;
+    // Last name only
+    if (parts.length > 1 && parts[parts.length - 1].length > 2) aliases[parts[parts.length - 1]] = lower;
+    // Common variations
+    if (parts[0] === 'stan') { aliases['stanley'] = lower; aliases['grunkle stan'] = lower; aliases['grunkle'] = lower; }
+    if (parts[0] === 'stanford') { aliases['ford'] = lower; aliases['great uncle ford'] = lower; }
+    if (parts[0] === 'dipper') { aliases['mason'] = lower; }
+    if (parts[0] === 'soos') { aliases['jesus'] = lower; aliases['soos ramirez'] = lower; }
+    if (parts[0] === 'bill') { aliases['bill cipher'] = lower; aliases['cipher'] = lower; }
+    if (parts[0] === 'mabel') { aliases['mabel pines'] = lower; }
+    if (parts[0] === 'wendy') { aliases['wendy corduroy'] = lower; }
+    if (parts[0] === 'gideon') { aliases['gideon gleeful'] = lower; aliases['gleeful'] = lower; }
+    if (parts[0] === 'pacifica') { aliases['pacifica northwest'] = lower; aliases['northwest'] = lower; }
+  }
+  return aliases;
+}
+
 // For each batch, find the most relevant scenes based on voiceover text
-function findRelevantScenes(allScenes, batchText, maxScenes = 80) {
+function findRelevantScenes(allScenes, batchText, maxScenes = 80, characterAliases = {}) {
   const textLower = batchText.toLowerCase();
   const words = textLower.split(/\s+/).filter(w => w.length > 3);
+
+  // Find which characters are mentioned in this batch text
+  const mentionedChars = new Set();
+  for (const [alias, fullName] of Object.entries(characterAliases)) {
+    if (textLower.includes(alias)) mentionedChars.add(fullName);
+  }
 
   // Score each scene by relevance to batch text
   const scored = allScenes.map(scene => {
@@ -101,21 +133,36 @@ function findRelevantScenes(allScenes, batchText, maxScenes = 80) {
 
     // Character name matches (highest priority)
     for (const charName of charNames) {
-      if (textLower.includes(charName)) score += 10;
-      // Also check first name only
       const firstName = charName.split(' ')[0];
+      // Direct character match in voiceover text
+      if (mentionedChars.has(charName) || mentionedChars.has(firstName)) score += 15;
+      if (textLower.includes(charName)) score += 10;
       if (firstName.length > 2 && textLower.includes(firstName)) score += 8;
     }
 
-    // Word overlap
+    // Check if scene description mentions characters from voiceover
+    for (const mentioned of mentionedChars) {
+      const mParts = mentioned.split(' ');
+      for (const part of mParts) {
+        if (part.length > 2 && descLower.includes(part)) score += 6;
+      }
+    }
+
+    // Word overlap (keywords from voiceover found in scene description)
     for (const word of words) {
       if (descLower.includes(word)) score += 2;
     }
 
+    // Context words (young, old, kids, children, etc.)
+    if (/young|pequen|criança|kid|child|boy|menino/i.test(textLower) && /young|child|kid|boy|small/i.test(descLower)) score += 5;
+    if (/secret|segredo|escond/i.test(textLower) && /secret|hid|door|basement|portal/i.test(descLower)) score += 5;
+    if (/fight|luta|batalha|combat/i.test(textLower) && /fight|battle|attack|punch|hit/i.test(descLower)) score += 4;
+    if (/mystery|mistério|journal|diário/i.test(textLower) && /journal|book|mystery|clue|code/i.test(descLower)) score += 4;
+
     // Mood matching
-    if (scene.mood === 'action' && /luta|atac|corr|fug|explo/i.test(textLower)) score += 3;
-    if (scene.mood === 'dramatic' && /segredo|mistér|escur|perigo|mort/i.test(textLower)) score += 3;
-    if (scene.mood === 'dialogue' && /disse|fal|convers|explic/i.test(textLower)) score += 2;
+    if (scene.mood === 'action' && /luta|atac|corr|fug|explo|fight|run|chase/i.test(textLower)) score += 3;
+    if (scene.mood === 'dramatic' && /segredo|mistér|escur|perigo|mort|secret|dark|danger/i.test(textLower)) score += 3;
+    if (scene.mood === 'dialogue' && /disse|fal|convers|explic|said|talk|explain/i.test(textLower)) score += 2;
 
     return { ...scene, score };
   });
@@ -182,6 +229,7 @@ async function generateEditorialPlan(segments, allScenes, seriesName, characters
 
   const allItems = [];
   const charactersList = (characters || []).join(', ') || 'unknown';
+  const charAliases = buildCharacterAliases(characters);
 
   for (let b = 0; b < batches.length; b++) {
     if (cancelled) throw new Error('Cancelado');
@@ -201,7 +249,7 @@ async function generateEditorialPlan(segments, allScenes, seriesName, characters
     const usedSceneKeys = new Set(allItems.map(it => `${it.episode}@${it.sceneTime}`));
     const relevantScenes = findRelevantScenes(
       allScenes.filter(s => !usedSceneKeys.has(`${s.episode}@${s.time}`)),
-      batchText, 80
+      batchText, 80, charAliases
     );
 
     // Build list of already used scenes to tell AI
