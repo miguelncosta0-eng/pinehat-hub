@@ -112,8 +112,9 @@ Hub.renderVoiceover = function () {
           </div>
           ${vo.ttsResult ? `
             <div class="vo-result" style="margin-top:12px;">
-              <div class="vo-result-file">
+              <div class="vo-result-file" style="display:flex;align-items:center;justify-content:space-between;">
                 <span>Audio gerado: ${vo.ttsResult.split(/[\\/]/).pop()}</span>
+                <button id="voSaveAudioBtn" class="btn btn-sm" style="background:var(--accent);color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;">💾 Guardar</button>
               </div>
               <audio controls src="file://${vo.ttsResult}" style="width:100%;margin-top:8px;"></audio>
             </div>
@@ -374,6 +375,16 @@ Hub.renderVoiceover = function () {
       Hub._voShowGenBar('Voiceover TTS', labels[data.phase] || data.phase, data.percent, data.phase === 'done');
     });
   }
+
+  // Save audio file
+  panel.querySelector('#voSaveAudioBtn')?.addEventListener('click', async () => {
+    const vo = Hub.state.voiceover;
+    if (!vo?.ttsResult) return;
+    const result = await window.api.saveAudioFile(vo.ttsResult);
+    if (result?.success) {
+      Hub.showToast(`Audio guardado em: ${result.path.split(/[\\/]/).pop()}`);
+    }
+  });
 
   // Remove file
   panel.querySelector('#voRemoveFile')?.addEventListener('click', () => {

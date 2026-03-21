@@ -928,6 +928,19 @@ function register(mainWindow) {
     return result.filePaths[0] || null;
   });
 
+  // Save audio file to user-chosen location
+  ipcMain.handle('save-audio-file', async (_event, srcPath) => {
+    if (!srcPath || !fs.existsSync(srcPath)) return { success: false, error: 'Ficheiro não encontrado' };
+    const ext = path.extname(srcPath).toLowerCase();
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: path.basename(srcPath),
+      filters: [{ name: 'Audio', extensions: [ext.replace('.', '') || 'mp3'] }],
+    });
+    if (result.canceled || !result.filePath) return { success: false };
+    fs.copyFileSync(srcPath, result.filePath);
+    return { success: true, path: result.filePath };
+  });
+
   // ── Project CRUD ──
   ipcMain.handle('editor-save-project', (_event, data) => {
     ensureEditorDir();

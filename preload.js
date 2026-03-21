@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Editor ──
   selectAudioFile: () => ipcRenderer.invoke('select-audio-file'),
+  saveAudioFile: (srcPath) => ipcRenderer.invoke('save-audio-file', srcPath),
   editorSaveProject: (data) => ipcRenderer.invoke('editor-save-project', data),
   editorLoadProject: (id) => ipcRenderer.invoke('editor-load-project', id),
   editorGetProjects: () => ipcRenderer.invoke('editor-get-projects'),
