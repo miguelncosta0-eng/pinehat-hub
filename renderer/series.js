@@ -157,7 +157,7 @@ Hub._renderSeriesDetail = async function (panel, seriesId) {
   });
 
   panel.querySelector('#seriesDeepAnalyzeBtn')?.addEventListener('click', () => {
-    Hub._seriesDeepAnalyzeAll(seriesId, series.episodes, true); // force all
+    Hub._seriesDeepAnalyzeAll(seriesId, series.episodes, false); // only missing
   });
 
   panel.querySelector('#seriesSaveCharacters')?.addEventListener('click', async () => {
@@ -253,12 +253,22 @@ Hub._seriesAnalyzeNext = async function (seriesId) {
 
 Hub._seriesDeepAnalyzeAll = async function (seriesId, episodes, forceAll) {
   if (Hub._seriesCurrentAnalysis) return;
-  const toAnalyze = forceAll ? [...episodes] : episodes.filter(ep => !ep.deepAnalyzed);
-  if (toAnalyze.length === 0) { Hub.showToast('Todos os episódios já têm análise profunda'); return; }
 
-  Hub._seriesAnalysisQueue = [...toAnalyze];
+  // Run in backend — survives navigation
+  Hub._seriesCurrentAnalysis = { seriesId, code: 'all' };
   Hub._seriesDeepMode = true;
-  await Hub._seriesDeepAnalyzeNext(seriesId);
+  Hub.renderSeries();
+
+  try {
+    const result = await window.api.seriesDeepAnalyzeAll({ seriesId, forceAll });
+    if (!result.success) {
+      Hub.showToast(result.error || 'Erro na análise', 'error');
+    }
+  } catch (err) {
+    console.warn('Deep analyze all error:', err);
+  }
+
+  // The backend runs async, progress comes via events
 };
 
 Hub._seriesDeepAnalyzeNext = async function (seriesId) {
@@ -287,6 +297,32 @@ Hub._seriesDeepAnalyzeNext = async function (seriesId) {
 };
 
 Hub._seriesAnalysisProgress = function (data) {
+  // Update gen-bar even when not on series page (background analysis)
+  const bar = document.getElementById('genBar');
+  if (bar && data.phase === 'analyzing') {
+    bar.classList.add('visible');
+    const phase = bar.querySelector('.gen-phase');
+    const fill = bar.querySelector('.gen-fill');
+    const pct = bar.querySelector('.gen-percent');
+    if (phase) phase.textContent = `Análise ${data.episodeCode}: Frame ${data.current}/${data.total}`;
+    const pctVal = Math.round((data.current / data.total) * 100);
+    if (fill) fill.style.width = `${pctVal}%`;
+    if (pct) pct.textContent = `${pctVal}%`;
+  } else if (bar && data.phase === 'deep-all-episode') {
+    bar.classList.add('visible');
+    const phase = bar.querySelector('.gen-phase');
+    if (phase) phase.textContent = `Análise profunda: ${data.episodeCode} (${data.current}/${data.total})`;
+  } else if (bar && (data.phase === 'deep-all-done' || data.phase === 'episode-saved')) {
+    if (data.phase === 'deep-all-done') {
+      bar.classList.remove('visible');
+      Hub._seriesCurrentAnalysis = null;
+      Hub._seriesDeepMode = false;
+      Hub.showToast(`Análise profunda concluída! ${data.completed}/${data.total} episódios`);
+      if (Hub.state.activeSection === 'series') Hub.renderSeries();
+    }
+  }
+
+  // Only update series-specific DOM if on series page
   if (Hub.state.activeSection !== 'series') return;
 
   const statusEl = document.getElementById('seriesAnalysisStatus');
@@ -304,7 +340,6 @@ Hub._seriesAnalysisProgress = function (data) {
   } else if (data.phase === 'frame-error') {
     if (statusEl) { statusEl.textContent = `${data.episodeCode}: Erro ffmpeg: ${data.error}`; statusEl.style.color = '#f87171'; }
     console.error('[Series] Frame extraction error:', data.error);
-    Hub.showToast(`ffmpeg: ${data.error.slice(0, 80)}`, 'error');
   } else if (data.phase === 'episode-saved') {
     const detailInfo = document.querySelector('.series-detail-info span');
     if (detailInfo) {

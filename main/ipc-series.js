@@ -455,9 +455,8 @@ function register(mainWindow) {
     return { success: !cancelled, scenes };
   });
 
-  // ── Deep Analysis (10s intervals, batch vision, characters) ──
-  ipcMain.handle('series-deep-analyze-episode', async (_event, { seriesId, episodeCode }) => {
-    analysisCancelled = false;
+  // ── Deep Analysis function (extracted so it can be called from both single and all) ──
+  async function deepAnalyzeEpisode(seriesId, episodeCode) {
     const settings = getSettings();
     if (!settings.openaiApiKey && !settings.elevateLabsApiKey) return { success: false, error: 'API key não configurada nas Definições (OpenAI ou Elevate Labs)' };
     // Prefer OpenAI for deep analysis (cheaper, no daily limit)
@@ -672,6 +671,65 @@ function register(mainWindow) {
 
     mainWindow.webContents.send('series-analyze-progress', { episodeCode, phase: 'done', cancelled });
     return { success: !cancelled, scenes, total: scenes.length, valid: validScenes };
+  }
+
+  // ── Single episode deep analysis (IPC wrapper) ──
+  ipcMain.handle('series-deep-analyze-episode', async (_event, { seriesId, episodeCode }) => {
+    analysisCancelled = false;
+    return deepAnalyzeEpisode(seriesId, episodeCode);
+  });
+
+  // ── Deep Analyze ALL (runs in main process, survives navigation) ──
+  let deepAnalyzeRunning = false;
+  ipcMain.handle('series-deep-analyze-all', async (_event, { seriesId, forceAll }) => {
+    if (deepAnalyzeRunning) return { success: false, error: 'Análise já em curso.' };
+    deepAnalyzeRunning = true;
+    analysisCancelled = false;
+
+    const all = getSeries();
+    const series = all.find(s => s.id === seriesId);
+    if (!series) { deepAnalyzeRunning = false; return { success: false, error: 'Série não encontrada.' }; }
+
+    const toAnalyze = forceAll
+      ? series.episodes.map(ep => ep.code)
+      : series.episodes.filter(ep => !ep.deepAnalyzed).map(ep => ep.code);
+
+    if (toAnalyze.length === 0) { deepAnalyzeRunning = false; return { success: true, message: 'Todos já analisados.' }; }
+
+    mainWindow.webContents.send('series-analyze-progress', {
+      phase: 'deep-all-start', total: toAnalyze.length, episodeCodes: toAnalyze,
+    });
+
+    // Fire-and-forget: run the loop in the background (survives navigation)
+    (async () => {
+      let completed = 0;
+      for (const code of toAnalyze) {
+        if (analysisCancelled) break;
+
+        mainWindow.webContents.send('series-analyze-progress', {
+          phase: 'deep-all-episode', episodeCode: code, current: completed + 1, total: toAnalyze.length,
+        });
+
+        try {
+          const result = await deepAnalyzeEpisode(seriesId, code);
+          if (!result.success) {
+            console.warn(`[DeepAll] ${code} failed: ${result.error}`);
+          } else {
+            console.log(`[DeepAll] ${code} done: ${result.valid}/${result.total} valid scenes`);
+          }
+        } catch (err) {
+          console.error(`[DeepAll] Error on ${code}: ${err.message}`);
+        }
+
+        completed++;
+      }
+
+      deepAnalyzeRunning = false;
+      analysisCancelled = false;
+      mainWindow.webContents.send('series-analyze-progress', { phase: 'deep-all-done', completed, total: toAnalyze.length });
+    })();
+
+    return { success: true, started: true, total: toAnalyze.length };
   });
 
   // ── AI Clip Assignment ──
