@@ -613,8 +613,8 @@ Return ONLY a JSON array with ${frameData.length} objects, one per frame in orde
         }
       }
 
-      // Small delay between batches to respect rate limits
-      await new Promise(r => setTimeout(r, 500));
+      // Delay between batches to respect rate limits (longer for OpenAI)
+      await new Promise(r => setTimeout(r, useOpenAI ? 1500 : 500));
     }
 
     // Clean up
