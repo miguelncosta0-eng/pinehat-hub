@@ -387,6 +387,7 @@ Hub._seUpdateStepIndicators = function (currentPhase) {
 if (!Hub.state.smartEditor._thumbCache) Hub.state.smartEditor._thumbCache = {};
 if (!Hub.state.smartEditor._expandedIdx) Hub.state.smartEditor._expandedIdx = null;
 if (!Hub.state.smartEditor._alts) Hub.state.smartEditor._alts = {};
+if (!Hub.state.smartEditor._filter) Hub.state.smartEditor._filter = 'all'; // 'all' | 'low' | 'notext'
 
 Hub._seRenderTimeline = function (panel) {
   const st = Hub.state.smartEditor;
@@ -399,6 +400,25 @@ Hub._seRenderTimeline = function (panel) {
   const frames = plan.filter(i => i.type === 'still_frame').length;
   const totalDur = plan.length > 0 ? plan[plan.length - 1].endTime : 0;
 
+  // Count low-score items
+  const lowScoreCount = plan.filter(i => (i._score || 0) < 30).length;
+  const noTextCount = plan.filter(i => {
+    const seg = segments.find(s => s.startTime <= i.startTime + 0.5 && s.endTime >= i.startTime - 0.5);
+    return !seg?.text;
+  }).length;
+
+  // Filter plan items
+  const filter = st._filter || 'all';
+  const filteredPlan = plan.map((item, idx) => ({ item, idx })).filter(({ item, idx }) => {
+    if (filter === 'all') return true;
+    if (filter === 'low') return (item._score || 0) < 30;
+    if (filter === 'notext') {
+      const seg = segments.find(s => s.startTime <= item.startTime + 0.5 && s.endTime >= item.startTime - 0.5);
+      return !seg?.text;
+    }
+    return true;
+  });
+
   panel.innerHTML = `
     <div class="section-header">
       <h2>Smart Editor — Timeline</h2>
@@ -407,13 +427,24 @@ Hub._seRenderTimeline = function (panel) {
         <button class="btn btn-primary" id="seExportBtn">${Hub.icons.play} Exportar</button>
       </div>
     </div>
-    <div class="se-timeline-stats">
-      ${clips} clips &middot; ${frames} frames &middot; ${Hub.fmtDur(totalDur)}
-      ${r.outputPath ? ' &middot; <span style="color:#4ade80">Exportado</span>' : ''}
+    <div class="se-timeline-filters">
+      <button class="btn btn-small ${filter === 'all' ? 'btn-primary' : 'btn-secondary'}" data-filter="all">
+        Todos (${plan.length})
+      </button>
+      <button class="btn btn-small ${filter === 'low' ? 'btn-primary' : 'btn-secondary'}" data-filter="low">
+        Score baixo (${lowScoreCount})
+      </button>
+      <button class="btn btn-small ${filter === 'notext' ? 'btn-primary' : 'btn-secondary'}" data-filter="notext">
+        Gap fillers (${noTextCount})
+      </button>
+      <span class="se-timeline-filter-info">
+        ${filter !== 'all' ? `A mostrar ${filteredPlan.length} de ${plan.length}` : `${clips} clips &middot; ${frames} frames &middot; ${Hub.fmtDur(totalDur)}`}
+      </span>
+      ${r.outputPath ? '<span style="color:#4ade80;margin-left:8px">Exportado</span>' : ''}
     </div>
     <div class="se-timeline-scroll">
       <div class="se-timeline-cards" id="seTimeline">
-        ${plan.map((item, idx) => Hub._seRenderCard(item, idx, segments)).join('')}
+        ${filteredPlan.map(({ item, idx }) => Hub._seRenderCard(item, idx, segments)).join('')}
       </div>
     </div>
   `;
@@ -424,6 +455,15 @@ Hub._seRenderTimeline = function (panel) {
     Hub.renderSmartEditor();
   });
   document.getElementById('seExportBtn')?.addEventListener('click', () => Hub._seExportFromTimeline());
+
+  // Filter buttons
+  panel.querySelectorAll('[data-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      st._filter = btn.dataset.filter;
+      st._expandedIdx = null;
+      Hub._seRenderTimeline(panel);
+    });
+  });
 
   // Bind card events
   Hub._seBindCardEvents(panel, plan, segments);

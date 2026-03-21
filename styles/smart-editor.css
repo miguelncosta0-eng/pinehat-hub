@@ -353,6 +353,19 @@
 /* Visual Timeline Cards                          */
 /* ═══════════════════════════════════════════════ */
 
+.se-timeline-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 28px;
+  flex-wrap: wrap;
+}
+.se-timeline-filter-info {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: 8px;
+}
+
 .se-timeline-cards {
   display: flex;
   flex-direction: column;
