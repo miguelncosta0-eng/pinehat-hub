@@ -374,7 +374,7 @@ function generateEditorialPlan(segments, sceneDB, seriesName, characters, settin
 // PHASE 2.5: VALIDATE AND FIX PLAN
 // ═══════════════════════════════════════════════════════════
 
-function validatePlan(plan, seriesData, audioDuration) {
+function validatePlan(plan, seriesData, audioDuration, sceneDB) {
   const episodes = {};
   for (const ep of (seriesData.episodes || [])) {
     episodes[ep.code] = ep;
@@ -439,23 +439,32 @@ function validatePlan(plan, seriesData, audioDuration) {
     // Fill gap before this item
     const gap = item.startTime - lastEnd;
     if (gap > 0.5) {
-      // Insert gap-filler segments
+      // Fill gap with real scenes from nearby items
       let t = lastEnd;
+      const prevItem = final.length > 0 ? final[final.length - 1] : item;
+      // Get valid scenes from DB for gap filling
+      const gapScenes = (sceneDB?.scenes || []).filter(s =>
+        s.desc && s.desc.length > 10 && !usedScenes.has(`${s.episode}@${s.time}`)
+      );
+      let gapIdx = Math.floor(Math.random() * Math.max(1, gapScenes.length - 10));
       while (t < item.startTime - 0.3) {
         const gapDur = Math.min(6, item.startTime - t);
         if (gapDur < 1) break;
-        // Use previous item's episode with shifted time
-        const prevItem = final.length > 0 ? final[final.length - 1] : item;
+        const gs = gapScenes.length > 0 ? gapScenes[gapIdx % gapScenes.length] : null;
         final.push({
           startTime: t,
           endTime: t + gapDur,
           type: 'still_frame',
-          episode: prevItem.episode,
-          sceneTime: (prevItem.sceneTime || 0) + 30 + Math.floor(Math.random() * 60),
+          episode: gs?.episode || prevItem.episode,
+          sceneTime: gs?.time || (prevItem.sceneTime || 0) + 30,
           effect: effects[final.length % 4],
           clipDuration: 5,
+          _desc: gs?.desc?.slice(0, 80) || '(filler)',
+          _score: 0,
         });
+        if (gs) usedScenes.add(`${gs.episode}@${gs.time}`);
         t += gapDur;
+        gapIdx++;
       }
     }
 
@@ -470,27 +479,32 @@ function validatePlan(plan, seriesData, audioDuration) {
     lastEnd = item.endTime;
   }
 
-  // Fill tail — extend to full audio duration using previous segments' episodes
+  // Fill tail — extend to full audio duration using real scenes from DB
   if (audioDuration && lastEnd < audioDuration - 1) {
     let t = lastEnd;
-    // Cycle through previous items to get varied episodes/scenes
-    let cycleIdx = 0;
+    const tailScenes = (sceneDB?.scenes || []).filter(s =>
+      s.desc && s.desc.length > 10 && !usedScenes.has(`${s.episode}@${s.time}`)
+    );
+    let tailIdx = Math.floor(Math.random() * Math.max(1, tailScenes.length - 20));
     while (t < audioDuration - 0.5) {
       const dur = Math.min(6, audioDuration - t);
       if (dur < 1) break;
-      // Pick from existing items, shifting the sceneTime
-      const sourceItem = final.length > 0 ? final[cycleIdx % final.length] : { episode: 'S01E01', sceneTime: 60 };
+      const ts = tailScenes.length > 0 ? tailScenes[tailIdx % tailScenes.length] : null;
+      const sourceItem = final.length > 0 ? final[final.length - 1] : { episode: 'S01E01', sceneTime: 60 };
       final.push({
         startTime: t,
         endTime: t + dur,
         type: 'still_frame',
-        episode: sourceItem.episode,
-        sceneTime: (sourceItem.sceneTime || 0) + 40 + Math.floor(Math.random() * 80),
+        episode: ts?.episode || sourceItem.episode,
+        sceneTime: ts?.time || (sourceItem.sceneTime || 0) + 40,
         effect: effects[final.length % 4],
         clipDuration: 5,
+        _desc: ts?.desc?.slice(0, 80) || '(tail filler)',
+        _score: 0,
       });
+      if (ts) usedScenes.add(`${ts.episode}@${ts.time}`);
       t += dur;
-      cycleIdx++;
+      tailIdx++;
     }
   }
 
@@ -774,7 +788,7 @@ function register(mainWindow) {
 
       // Step 5: Validate
       send({ phase: 'validating', percent: 50, detail: 'A validar...' });
-      const validPlan = validatePlan(plan, combined, audioDuration);
+      const validPlan = validatePlan(plan, combined, audioDuration, sceneDB);
       console.log(`[SmartEditor] Valid: ${validPlan.length} items`);
 
       if (validPlan.length === 0) {
