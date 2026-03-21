@@ -459,7 +459,13 @@ function register(mainWindow) {
   ipcMain.handle('series-deep-analyze-episode', async (_event, { seriesId, episodeCode }) => {
     analysisCancelled = false;
     const settings = getSettings();
-    if (!settings.elevateLabsApiKey) return { success: false, error: 'API key não configurada nas Definições' };
+    if (!settings.openaiApiKey && !settings.elevateLabsApiKey) return { success: false, error: 'API key não configurada nas Definições (OpenAI ou Elevate Labs)' };
+    // Prefer OpenAI for deep analysis (cheaper, no daily limit)
+    const useOpenAI = !!settings.openaiApiKey;
+    const deepApiBase = useOpenAI ? 'https://api.openai.com/v1' : CHAT_BASE;
+    const deepApiKey = useOpenAI ? settings.openaiApiKey : settings.elevateLabsApiKey;
+    const deepModel = useOpenAI ? 'gpt-4o-mini' : 'claude-sonnet-4.5';
+    console.log(`[DeepAnalysis] Using ${useOpenAI ? 'OpenAI (gpt-4o-mini)' : 'Elevate Labs'} for vision`);
 
     const all = getSeries();
     const sIdx = all.findIndex(s => s.id === seriesId);
@@ -543,14 +549,14 @@ Return ONLY a JSON array with ${frameData.length} objects, one per frame in orde
       });
 
       try {
-        const resp = await fetch(`${CHAT_BASE}/chat/completions`, {
+        const resp = await fetch(`${deepApiBase}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${settings.elevateLabsApiKey}`,
+            'Authorization': `Bearer ${deepApiKey}`,
           },
           body: JSON.stringify({
-            model: 'claude-sonnet-4.5',
+            model: deepModel,
             max_tokens: 800,
             messages: [{ role: 'user', content }],
           }),
