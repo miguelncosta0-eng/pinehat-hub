@@ -94,9 +94,9 @@ async function generateTTS(apiKey, text, voiceId, opts = {}) {
 /**
  * Poll TTS task status until complete
  */
-async function pollTTSStatus(apiKey, taskId, maxAttempts = 60) {
+async function pollTTSStatus(apiKey, taskId, maxAttempts = 300) {
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 3000));
 
     const response = await fetch(`${MEDIA_BASE}/media/${taskId}?type=tts`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
