@@ -1,0 +1,102 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pkg.outputs.version }}
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get version from package.json
+        id: pkg
+        run: echo "version=$(node -p 'require(\"./package.json\").version')" >> $GITHUB_OUTPUT
+
+      - name: Check if version changed
+        id: check
+        run: |
+          PREV=$(git show HEAD~1:package.json 2>/dev/null | node -p 'JSON.parse(require("fs").readFileSync("/dev/stdin","utf8")).version' 2>/dev/null || echo "0.0.0")
+          CURR=${{ steps.pkg.outputs.version }}
+          if [ "$PREV" != "$CURR" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Version changed: $PREV → $CURR"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Version unchanged: $CURR"
+          fi
+
+  build-windows:
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-build
+          path: |
+            dist/*.exe
+            dist/*.exe.blockmap
+            dist/latest.yml
+
+  build-mac:
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run build:mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-build
+          path: |
+            dist/*.dmg
+            dist/*.dmg.blockmap
+            dist/latest-mac.yml
+
+  release:
+    needs: [check-version, build-windows, build-mac]
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-build
+          path: dist-win
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-build
+          path: dist-mac
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-version.outputs.version }}
+          name: v${{ needs.check-version.outputs.version }}
+          body: "Auto-release v${{ needs.check-version.outputs.version }}"
+          files: |
+            dist-win/*
+            dist-mac/*
