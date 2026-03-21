@@ -1,10 +1,17 @@
 window.Hub = window.Hub || {};
 
 Hub.showToast = function (msg, type = 'success') {
+  // Safety: never show [object Object]
+  let text;
+  if (typeof msg === 'string') text = msg;
+  else if (msg instanceof Error) text = msg.message;
+  else if (msg && typeof msg === 'object') text = msg.message || msg.error || JSON.stringify(msg);
+  else text = String(msg || 'Erro desconhecido');
+
   const container = document.getElementById('toastContainer');
   const t = document.createElement('div');
   t.className = `toast toast-${type}`;
-  t.textContent = msg;
+  t.textContent = text;
   container.appendChild(t);
   setTimeout(() => {
     t.style.opacity = '0';
