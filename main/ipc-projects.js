@@ -120,17 +120,24 @@ async function updateCloudProject(id, updates) {
   if (updates.voiceover !== undefined) mapped.voiceover = updates.voiceover;
   mapped.updated_at = new Date().toISOString();
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('shared_projects')
     .update(mapped)
-    .eq('id', id);
+    .eq('id', id)
+    .select();
 
   if (error) {
     console.error('[Projects] Supabase update error:', error.message);
     return { success: false, error: error.message };
   }
 
-  return { success: true };
+  if (!data || data.length === 0) {
+    console.error('[Projects] Supabase update affected 0 rows for id:', id);
+    return { success: false, error: 'Projeto não encontrado no cloud.' };
+  }
+
+  console.log('[Projects] Supabase update success:', data[0].state);
+  return { success: true, project: data[0] };
 }
 
 async function deleteCloudProject(id) {
@@ -282,9 +289,12 @@ function register() {
         .single();
 
       if (cloudRow) {
+        console.log(`[Projects] Found cloud project ${id}, updating state to: ${updates.state || 'N/A'}`);
         const result = await updateCloudProject(id, updates);
         if (result.success) {
-          console.log(`[Projects] Cloud update success for ${id}`);
+          console.log(`[Projects] Cloud update success for ${id}, new state: ${result.project?.state || 'unknown'}`);
+          // Notify so UI refreshes
+          mainWindow.webContents.send('projects-changed');
           return result;
         }
         console.error(`[Projects] Cloud update failed for ${id}: ${result.error}`);
