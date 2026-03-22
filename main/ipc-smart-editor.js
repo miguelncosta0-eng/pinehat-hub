@@ -673,6 +673,31 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
       detail: `A planear segmento ${i + 1}/${segments.length}...`,
     });
 
+    // Check for motion graphic trigger — insert as separate black-bg segment
+    const mgEffect = detectEffect(seg.text);
+    if (mgEffect && segDuration >= 3) {
+      // Use 2-3 seconds for the motion graphic, rest for normal clips
+      const mgDuration = Math.min(3, segDuration * 0.4);
+
+      allItems.push({
+        startTime: seg.startTime,
+        endTime: seg.startTime + mgDuration,
+        type: 'motion_graphic',
+        episode: 'S01E01', // placeholder, won't be used for extraction
+        sceneTime: 0,
+        effect: 'none',
+        clipDuration: mgDuration,
+        _score: 100,
+        _desc: `[MG:${mgEffect.type}] ${mgEffect.text || mgEffect.number || ''}`,
+        motionGraphic: mgEffect,
+      });
+
+      // Adjust segment start for normal clips
+      seg.startTime += mgDuration;
+      const newDuration = seg.endTime - seg.startTime;
+      if (newDuration < 1) continue;
+    }
+
     // Find best scenes — use embeddings if available, text matching as fallback
     let bestScenes;
     if (useEmbeddings) {
@@ -752,9 +777,6 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
 
       const isVideo = j === 0 || j % 3 === 0;
 
-      // Detect motion graphics effect for first sub-segment only
-      const mgEffect = (j === 0) ? detectEffect(seg.text) : null;
-
       allItems.push({
         startTime: t,
         endTime: subEnd,
@@ -765,7 +787,6 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
         clipDuration: isVideo ? Math.min(5, dur) : 0,
         _score: scene.score,
         _desc: scene.desc.slice(0, 80),
-        motionGraphic: mgEffect,
       });
 
       usedSceneIds.add(scene.id);
@@ -1103,28 +1124,38 @@ async function extractAssets(plan, seriesData, tmpDir, onProgress) {
       for (let attempt = 0; attempt < 3 && !ok; attempt++) {
         try {
           const t = item.sceneTime + (attempt * 20);
-          if (item.type === 'video_clip') {
+          if (item.type === 'motion_graphic') {
+            // Generate black background with motion graphic effect
+            try {
+              const mg = item.motionGraphic;
+              let mgFilter = '';
+              if (mg.type === 'counter') {
+                mgFilter = buildNumberCounter({ number: mg.number, label: mg.label, duration, startTime: 0 });
+              } else if (mg.type === 'typewriter') {
+                mgFilter = buildTypewriter({ text: mg.text, duration, startTime: 0 });
+              } else if (mg.type === 'glitch') {
+                mgFilter = buildGlitchText({ text: mg.text, duration, startTime: 0 });
+              } else if (mg.type === 'chart') {
+                mgFilter = buildAnimatedChart({ values: mg.values, labels: mg.labels, title: mg.title, duration, startTime: 0 });
+              }
+
+              if (mgFilter) {
+                const vf = `color=c=0x0a0a0f:s=1920x1080:d=${duration}:r=30` + mgFilter;
+                await runFfmpeg(ffmpegPath, [
+                  '-y', '-f', 'lavfi', '-i', vf,
+                  '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an',
+                  outputPath,
+                ], null, 30000);
+                ok = true;
+                break;
+              }
+            } catch (mgErr) {
+              console.error(`[SmartEditor] Motion graphic error: ${mgErr.message}`);
+            }
+          } else if (item.type === 'video_clip') {
             const clipDur = Math.min(item.clipDuration || 5, duration);
 
-            // Build motion graphics overlay filter if applicable
-            let overlayFilter = '';
-            if (item.motionGraphic) {
-              try {
-                const mg = item.motionGraphic;
-                if (mg.type === 'counter') {
-                  overlayFilter = buildNumberCounter({ number: mg.number, label: mg.label, duration: Math.min(3, clipDur), startTime: 0 });
-                } else if (mg.type === 'typewriter') {
-                  overlayFilter = buildTypewriter({ text: mg.text, duration: Math.min(4, clipDur), startTime: 0 });
-                } else if (mg.type === 'glitch') {
-                  overlayFilter = buildGlitchText({ text: mg.text, duration: Math.min(3, clipDur), startTime: 0 });
-                }
-              } catch (mgErr) {
-                console.error(`[SmartEditor] Motion graphic error: ${mgErr.message}`);
-                overlayFilter = '';
-              }
-            }
-
-            await extractVideoClip(episodePath, t, clipDur, outputPath, overlayFilter);
+            await extractVideoClip(episodePath, t, clipDur, outputPath);
 
             // Extend clip if shorter than segment
             if (clipDur < duration - 0.5) {
