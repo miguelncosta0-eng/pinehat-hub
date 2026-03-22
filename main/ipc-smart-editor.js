@@ -20,6 +20,7 @@ const { DATA_DIR, readJson, writeJson, uuid, ensureDataDir } = require('./ipc-da
 const { getSettings } = require('./ipc-settings');
 const { CHAT_BASE } = require('./elevate-api');
 const { findBinary, runFfmpeg, probeDuration, transcribe } = require('./whisper-utils');
+const { buildNumberCounter, buildTypewriter, buildGlitchText, buildAnimatedChart, detectEffect } = require('./motion-graphics');
 
 const SMART_DIR = path.join(DATA_DIR, 'smart-editor');
 const PARALLEL = Math.min(6, Math.max(2, Math.floor(os.cpus().length / 2)));
@@ -751,6 +752,9 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
 
       const isVideo = j === 0 || j % 3 === 0;
 
+      // Detect motion graphics effect for first sub-segment only
+      const mgEffect = (j === 0) ? detectEffect(seg.text) : null;
+
       allItems.push({
         startTime: t,
         endTime: subEnd,
@@ -761,6 +765,7 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
         clipDuration: isVideo ? Math.min(5, dur) : 0,
         _score: scene.score,
         _desc: scene.desc.slice(0, 80),
+        motionGraphic: mgEffect,
       });
 
       usedSceneIds.add(scene.id);
@@ -1006,12 +1011,14 @@ function validatePlan(plan, seriesData, audioDuration, sceneDB) {
 // PHASE 3: EXTRACTION + ASSEMBLY
 // ═══════════════════════════════════════════════════════════
 
-function extractVideoClip(episodePath, sceneTime, duration, outputPath) {
+function extractVideoClip(episodePath, sceneTime, duration, outputPath, overlayFilter) {
   const ffmpegPath = findBinary('ffmpeg');
+  const baseVf = 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black';
+  const vf = overlayFilter ? baseVf + overlayFilter : baseVf;
   return runFfmpeg(ffmpegPath, [
     '-y', '-ss', String(sceneTime), '-i', episodePath,
     '-t', String(duration),
-    '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black',
+    '-vf', vf,
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '30', '-an',
     outputPath,
   ], null, 60000);
@@ -1098,7 +1105,26 @@ async function extractAssets(plan, seriesData, tmpDir, onProgress) {
           const t = item.sceneTime + (attempt * 20);
           if (item.type === 'video_clip') {
             const clipDur = Math.min(item.clipDuration || 5, duration);
-            await extractVideoClip(episodePath, t, clipDur, outputPath);
+
+            // Build motion graphics overlay filter if applicable
+            let overlayFilter = '';
+            if (item.motionGraphic) {
+              try {
+                const mg = item.motionGraphic;
+                if (mg.type === 'counter') {
+                  overlayFilter = buildNumberCounter({ number: mg.number, label: mg.label, duration: Math.min(3, clipDur), startTime: 0 });
+                } else if (mg.type === 'typewriter') {
+                  overlayFilter = buildTypewriter({ text: mg.text, duration: Math.min(4, clipDur), startTime: 0 });
+                } else if (mg.type === 'glitch') {
+                  overlayFilter = buildGlitchText({ text: mg.text, duration: Math.min(3, clipDur), startTime: 0 });
+                }
+              } catch (mgErr) {
+                console.error(`[SmartEditor] Motion graphic error: ${mgErr.message}`);
+                overlayFilter = '';
+              }
+            }
+
+            await extractVideoClip(episodePath, t, clipDur, outputPath, overlayFilter);
 
             // Extend clip if shorter than segment
             if (clipDur < duration - 0.5) {
