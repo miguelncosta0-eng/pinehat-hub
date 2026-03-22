@@ -546,7 +546,8 @@ async function getSceneEmbeddings(scenes, openaiKey, onProgress) {
 }
 
 function findBestScenesByEmbedding(scenes, embeddingsCache, queryEmbedding, voText, charAliases, usedSceneIds, maxScenes = 30) {
-  if (!embeddingsCache || !queryEmbedding) return [];
+  if (!embeddingsCache || !queryEmbedding || typeof embeddingsCache !== 'object') return [];
+  try {
   const scored = [];
   const mentionedChars = findMentionedChars(voText, charAliases);
   const voLow = voText.toLowerCase();
@@ -611,6 +612,10 @@ function findBestScenesByEmbedding(scenes, embeddingsCache, queryEmbedding, voTe
   }
 
   return result;
+  } catch (err) {
+    console.error('[SmartEditor] Embedding search failed:', err.message);
+    return [];
+  }
 }
 
 // ── Direct Scene Assignment — uses embeddings when available ──
