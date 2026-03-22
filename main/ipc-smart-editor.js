@@ -696,11 +696,46 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
     const subDuration = segDuration / subCount;
     let t = seg.startTime;
 
-    for (let j = 0; j < subCount && j < bestScenes.length; j++) {
-      const scene = bestScenes[j];
+    // First sub-segment gets the best scene
+    const primaryScene = bestScenes[0];
+    const primaryEp = primaryScene.episode;
+    const primaryTime = primaryScene.time;
+
+    for (let j = 0; j < subCount; j++) {
       const subEnd = Math.min(t + subDuration, seg.endTime);
       const dur = subEnd - t;
       if (dur < 1) break;
+
+      let scene;
+      if (j === 0) {
+        // First sub-segment: use the best match
+        scene = primaryScene;
+      } else {
+        // Subsequent sub-segments: prefer scenes from SAME episode, nearby timestamps
+        // This creates visual continuity while the VO talks about the same topic
+        const sameEpScenes = bestScenes.filter(s =>
+          !usedSceneIds.has(s.id) &&
+          s.episode === primaryEp &&
+          Math.abs(s.time - primaryTime) < 120 // Within 2 minutes of primary scene
+        );
+
+        if (sameEpScenes.length > 0) {
+          // Sort by proximity to primary scene
+          sameEpScenes.sort((a, b) => Math.abs(a.time - primaryTime) - Math.abs(b.time - primaryTime));
+          scene = sameEpScenes[0];
+        } else {
+          // Fallback: nearby scenes from same episode (any distance)
+          const anyFromEp = bestScenes.filter(s => !usedSceneIds.has(s.id) && s.episode === primaryEp);
+          if (anyFromEp.length > 0) {
+            scene = anyFromEp[0];
+          } else {
+            // Last resort: next best from any episode
+            const unused = bestScenes.filter(s => !usedSceneIds.has(s.id));
+            scene = unused[j - 1] || unused[0];
+          }
+        }
+        if (!scene) break;
+      }
 
       const isVideo = j === 0 || j % 3 === 0;
 
