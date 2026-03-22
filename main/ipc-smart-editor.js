@@ -72,6 +72,84 @@ function groupWordsIntoSegments(words) {
 // ═══════════════════════════════════════════════════════════
 
 // Build complete scene database with episode context
+// Load episode transcripts from disk
+function loadTranscripts(seriesId) {
+  const TRANSCRIPTS_DIR = path.join(DATA_DIR, 'series_transcripts');
+  const transcripts = {};
+  if (!fs.existsSync(TRANSCRIPTS_DIR)) return transcripts;
+
+  try {
+    const files = fs.readdirSync(TRANSCRIPTS_DIR).filter(f => f.startsWith(seriesId) && f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(TRANSCRIPTS_DIR, file), 'utf8'));
+        if (data.episodeCode) {
+          transcripts[data.episodeCode] = data;
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+
+  console.log(`[SmartEditor] Loaded ${Object.keys(transcripts).length} episode transcripts`);
+  return transcripts;
+}
+
+// Find dialogue moments in transcripts that match voiceover text
+function findTranscriptMatches(voText, transcripts, maxResults = 20) {
+  const voLow = voText.toLowerCase();
+  // Extract key words (3+ chars, not stop words)
+  const stopWords = new Set(['the', 'and', 'but', 'for', 'are', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'has', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'way', 'who', 'did', 'get', 'let', 'say', 'she', 'too', 'use', 'with', 'this', 'that', 'from', 'they', 'been', 'have', 'will', 'what', 'when', 'your', 'which', 'their', 'about', 'would', 'there', 'these', 'than', 'them', 'then', 'some', 'into', 'just', 'also', 'more', 'very', 'after', 'most', 'like', 'over', 'such', 'where', 'those', 'being', 'does', 'it\'s', 'don\'t', 'he\'s', 'she\'s']);
+  const keywords = voLow.split(/\W+/).filter(w => w.length >= 3 && !stopWords.has(w));
+  if (keywords.length === 0) return [];
+
+  const matches = [];
+
+  for (const [epCode, transcript] of Object.entries(transcripts)) {
+    if (!transcript.words || transcript.words.length === 0) continue;
+
+    const fullTextLow = (transcript.fullText || '').toLowerCase();
+
+    // Check if any keywords appear in this episode's dialogue
+    const matchingKeywords = keywords.filter(kw => fullTextLow.includes(kw));
+    if (matchingKeywords.length === 0) continue;
+
+    // Find specific word positions for best timestamp matching
+    for (const kw of matchingKeywords) {
+      for (let i = 0; i < transcript.words.length; i++) {
+        const word = transcript.words[i];
+        if (word.word.toLowerCase().includes(kw)) {
+          // Get surrounding context (5 words before and after)
+          const contextStart = Math.max(0, i - 5);
+          const contextEnd = Math.min(transcript.words.length - 1, i + 5);
+          const context = transcript.words.slice(contextStart, contextEnd + 1)
+            .map(w => w.word).join(' ');
+
+          matches.push({
+            episode: epCode,
+            time: Math.floor(word.start),
+            keyword: kw,
+            context: context.slice(0, 100),
+            score: matchingKeywords.length, // More matching keywords = higher score
+          });
+          break; // One match per keyword per episode
+        }
+      }
+    }
+  }
+
+  // Sort by score, deduplicate by episode+time
+  const seen = new Set();
+  return matches
+    .sort((a, b) => b.score - a.score)
+    .filter(m => {
+      const key = `${m.episode}@${Math.floor(m.time / 30) * 30}`; // Group by 30s windows
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, maxResults);
+}
+
 function buildSceneDB(seriesList) {
   const scenes = [];
   const episodeSummaries = {};
@@ -295,10 +373,25 @@ function extractKeywords(text) {
     .filter(w => w.length > 3 && !stopWords.has(w));
 }
 
-// Find best scenes for a voiceover batch — character-first, diversity-enforced
-function findBestScenes(allScenes, episodeSummaries, voText, charAliases, usedSceneIds, maxScenes = 120) {
+// Find best scenes for a voiceover batch — character-first, diversity-enforced, transcript-boosted
+function findBestScenes(allScenes, episodeSummaries, voText, charAliases, usedSceneIds, transcripts, maxScenes = 120) {
   const mentionedChars = findMentionedChars(voText, charAliases);
   const keywords = extractKeywords(voText);
+
+  // Find transcript matches (dialogue that matches voiceover content)
+  const transcriptMatches = findTranscriptMatches(voText, transcripts || {}, 30);
+  const transcriptBonus = {};
+  for (const match of transcriptMatches) {
+    // Boost scenes within 15 seconds of dialogue match
+    for (let t = match.time - 15; t <= match.time + 15; t += 10) {
+      const key = `${match.episode}@${t}`;
+      transcriptBonus[key] = Math.max(transcriptBonus[key] || 0, match.score * 15); // Up to 60+ bonus pts
+    }
+  }
+
+  if (transcriptMatches.length > 0) {
+    console.log(`[SmartEditor] Transcript matches: ${transcriptMatches.length} (e.g. ${transcriptMatches[0]?.episode}@${transcriptMatches[0]?.time}s "${transcriptMatches[0]?.context?.slice(0, 50)}")`);
+  }
 
   console.log(`[SmartEditor] Matching: chars=[${mentionedChars.join(',')}], keywords=${keywords.length}`);
 
@@ -306,9 +399,22 @@ function findBestScenes(allScenes, episodeSummaries, voText, charAliases, usedSc
   const scored = [];
   for (const scene of allScenes) {
     if (usedSceneIds.has(scene.id)) continue;
-    if (!scene.desc || scene.desc.length < 10) continue; // skip empty/broken scenes
-    const score = scoreScene(scene, voText, mentionedChars, keywords);
-    if (score >= 10) scored.push({ ...scene, score }); // minimum threshold
+    if (!scene.desc || scene.desc.length < 10) continue;
+    let score = scoreScene(scene, voText, mentionedChars, keywords);
+
+    // Apply transcript dialogue bonus — scenes near matching dialogue get boosted
+    const nearbyKeys = [];
+    for (let t = scene.time - 10; t <= scene.time + 10; t += 10) {
+      nearbyKeys.push(`${scene.episode}@${t}`);
+    }
+    for (const key of nearbyKeys) {
+      if (transcriptBonus[key]) {
+        score += transcriptBonus[key];
+        break; // Only apply once
+      }
+    }
+
+    if (score >= 10) scored.push({ ...scene, score });
   }
 
   // Sort by score
@@ -509,7 +615,7 @@ function findBestScenesByEmbedding(scenes, embeddingsCache, queryEmbedding, voTe
 
 // ── Direct Scene Assignment — uses embeddings when available ──
 
-async function generateEditorialPlan(segments, sceneDB, seriesName, characters, settings, onProgress) {
+async function generateEditorialPlan(segments, sceneDB, seriesName, characters, settings, onProgress, transcripts) {
   const charAliases = buildCharAliases(characters);
   const usedSceneIds = new Set();
   const allItems = [];
@@ -570,7 +676,7 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
     } else {
       bestScenes = findBestScenes(
         sceneDB.scenes, sceneDB.episodeSummaries,
-        seg.text, charAliases, usedSceneIds, 30
+        seg.text, charAliases, usedSceneIds, transcripts, 30
       );
     }
 
@@ -1024,10 +1130,18 @@ function register(mainWindow) {
 
       const sceneDB = buildSceneDB(seriesToSearch);
 
+      // Load episode transcripts for dialogue-based matching
+      const allTranscripts = {};
+      for (const sid of selectedIds) {
+        const t = loadTranscripts(sid);
+        Object.assign(allTranscripts, t);
+      }
+
       // Step 4: Plan with embeddings (semantic matching) or text scoring fallback
       const plan = await generateEditorialPlan(
         segments, sceneDB, seriesName, combined.characters, settings,
         (p) => send({ phase: p.phase || 'planning', percent: 20 + Math.round((p.percent || 0) * 0.30), detail: p.detail }),
+        allTranscripts,
       );
       console.log(`[SmartEditor] Raw plan: ${plan.length} items`);
 
@@ -1150,7 +1264,7 @@ function register(mainWindow) {
 
       const bestScenes = findBestScenes(
         sceneDB.scenes, sceneDB.episodeSummaries,
-        segmentText, charAliases, excludeSet, 10
+        segmentText, charAliases, excludeSet, {}, 10
       );
 
       // Extract thumbnails for top 5
