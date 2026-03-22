@@ -15,6 +15,15 @@ function isImage(filePath) { return IMAGE_EXTS.includes(path.extname(filePath).t
 function isMedia(filePath) { return ALL_EXTS.includes(path.extname(filePath).toLowerCase()); }
 
 function findBinary(name) {
+  // On Mac, check common Homebrew paths first (Electron doesn't inherit shell PATH)
+  if (process.platform === 'darwin') {
+    const fs = require('fs');
+    const macPaths = [`/usr/local/bin/${name}`, `/opt/homebrew/bin/${name}`, `/usr/bin/${name}`];
+    for (const p of macPaths) {
+      if (fs.existsSync(p)) return Promise.resolve(p);
+    }
+  }
+
   const cmd = process.platform === 'win32' ? `where ${name}` : `which ${name}`;
   return new Promise((resolve) => {
     exec(cmd, (error, stdout) => {

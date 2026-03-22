@@ -48,6 +48,14 @@ function scanFolder(folderPath) {
 
 function findBinary(name) {
   const { execSync } = require('child_process');
+
+  if (process.platform === 'darwin') {
+    const macPaths = [`/usr/local/bin/${name}`, `/opt/homebrew/bin/${name}`, `/usr/bin/${name}`];
+    for (const p of macPaths) {
+      if (fs.existsSync(p)) return p;
+    }
+  }
+
   try {
     const cmd = process.platform === 'win32' ? `where ${name}` : `which ${name}`;
     return execSync(cmd, { encoding: 'utf-8' }).trim().split('\n')[0].trim();

@@ -30,6 +30,19 @@ const WHISPER_MODEL_SIZES = { base: 148, small: 466, medium: 1536 }; // MB
 
 function findBinary(name) {
   const { execSync } = require('child_process');
+
+  // On Mac, check common Homebrew paths first (Electron doesn't inherit shell PATH)
+  if (IS_MAC) {
+    const macPaths = [
+      `/usr/local/bin/${name}`,
+      `/opt/homebrew/bin/${name}`,
+      `/usr/bin/${name}`,
+    ];
+    for (const p of macPaths) {
+      if (fs.existsSync(p)) return p;
+    }
+  }
+
   try {
     const cmd = IS_WIN ? `where ${name}` : `which ${name}`;
     return execSync(cmd, { encoding: 'utf-8' }).trim().split('\n')[0].trim();

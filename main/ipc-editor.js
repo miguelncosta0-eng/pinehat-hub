@@ -26,12 +26,26 @@ function ensureEditorDir() {
 
 function findBinary(name) {
   const { execSync } = require('child_process');
+  const fs = require('fs');
+
+  // On Mac, check common Homebrew paths first (Electron doesn't inherit shell PATH)
+  if (process.platform === 'darwin') {
+    const macPaths = [
+      `/usr/local/bin/${name}`,
+      `/opt/homebrew/bin/${name}`,
+      `/usr/bin/${name}`,
+    ];
+    for (const p of macPaths) {
+      if (fs.existsSync(p)) return p;
+    }
+  }
+
   try {
     const cmd = process.platform === 'win32' ? `where ${name}` : `which ${name}`;
     const result = execSync(cmd, { encoding: 'utf-8' }).trim().split('\n')[0].trim();
     return result;
   } catch (_) {
-    return name; // hope it's in PATH
+    return name;
   }
 }
 
