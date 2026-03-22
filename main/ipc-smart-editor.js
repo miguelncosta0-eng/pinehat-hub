@@ -696,8 +696,20 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
     const subDuration = segDuration / subCount;
     let t = seg.startTime;
 
-    // First sub-segment gets the best scene
-    const primaryScene = bestScenes[0];
+    // ── VISION VERIFICATION: GPT-4o picks the best scene by seeing the frames ──
+    let primaryIdx = 0;
+    const openaiKey = settings.openaiApiKey;
+    if (openaiKey && bestScenes.length > 1) {
+      const top5 = bestScenes.slice(0, Math.min(5, bestScenes.length));
+      try {
+        primaryIdx = await visionPickBestScene(seg.text, top5, openaiKey);
+      } catch (err) {
+        console.error(`[SmartEditor] Vision pick failed, using score: ${err.message}`);
+        primaryIdx = 0;
+      }
+    }
+
+    const primaryScene = bestScenes[primaryIdx];
     const primaryEp = primaryScene.episode;
     const primaryTime = primaryScene.time;
 
@@ -758,6 +770,94 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
 
   console.log(`[SmartEditor] Plan: ${allItems.length} items from ${segments.length} segments`);
   return allItems;
+}
+
+// ── Vision Verification: GPT-4o picks the best frame by SEEING them ──
+
+async function extractFrameAsBase64(filePath, timeSeconds) {
+  const tmpFrame = path.join(os.tmpdir(), `pinehat_vv_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`);
+  try {
+    const ffmpegPath = findBinary('ffmpeg');
+    await runFfmpeg(ffmpegPath, [
+      '-y', '-ss', String(Math.max(0, timeSeconds)), '-i', filePath,
+      '-vframes', '1', '-q:v', '5', '-vf', 'scale=320:-1', tmpFrame,
+    ], null, 15000);
+    if (!fs.existsSync(tmpFrame)) return null;
+    const base64 = fs.readFileSync(tmpFrame).toString('base64');
+    try { fs.unlinkSync(tmpFrame); } catch (_) {}
+    return base64;
+  } catch (err) {
+    try { fs.unlinkSync(tmpFrame); } catch (_) {}
+    return null;
+  }
+}
+
+async function visionPickBestScene(voText, candidates, openaiKey) {
+  if (!openaiKey || candidates.length <= 1) return 0;
+
+  // Extract frames from each candidate
+  const frames = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    if (!c.filePath || !fs.existsSync(c.filePath)) {
+      frames.push(null);
+      continue;
+    }
+    const base64 = await extractFrameAsBase64(c.filePath, c.time);
+    frames.push(base64);
+  }
+
+  // Build vision message with all frames
+  const content = [];
+  const validIndices = [];
+
+  for (let i = 0; i < frames.length; i++) {
+    if (!frames[i]) continue;
+    validIndices.push(i);
+    content.push({
+      type: 'image_url',
+      image_url: { url: `data:image/jpeg;base64,${frames[i]}`, detail: 'low' },
+    });
+  }
+
+  if (validIndices.length <= 1) return 0;
+
+  content.push({
+    type: 'text',
+    text: `The voiceover says: "${voText.slice(0, 200)}"
+
+I showed you ${validIndices.length} frames (numbered 1 to ${validIndices.length}). Which single frame BEST visually matches what the voiceover is talking about? Consider: characters shown, setting, mood, and action.
+
+Reply with ONLY the number (e.g. "2"). Nothing else.`,
+  });
+
+  try {
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        max_tokens: 5,
+        messages: [{ role: 'user', content }],
+      }),
+    });
+
+    if (!resp.ok) return 0;
+    const data = await resp.json();
+    const answer = (data.choices?.[0]?.message?.content || '').trim();
+    const pickedNum = parseInt(answer, 10);
+
+    if (pickedNum >= 1 && pickedNum <= validIndices.length) {
+      return validIndices[pickedNum - 1]; // Convert 1-based to original index
+    }
+    return 0;
+  } catch (err) {
+    console.error('[VisionPick] Error:', err.message);
+    return 0;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
