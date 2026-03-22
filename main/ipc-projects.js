@@ -270,18 +270,29 @@ function register() {
   });
 
   ipcMain.handle('update-project', async (_event, id, updates) => {
-    // Check if this project exists in Supabase first
-    const supabase = getSupabase();
-    const { data: cloudRow } = await supabase
-      .from('shared_projects')
-      .select('id')
-      .eq('id', id)
-      .single();
+    console.log(`[Projects] Updating ${id} with:`, JSON.stringify(updates).slice(0, 200));
 
-    if (cloudRow) {
-      // Project exists in cloud — update there
-      const result = await updateCloudProject(id, updates);
-      return result;
+    // Try cloud first
+    try {
+      const supabase = getSupabase();
+      const { data: cloudRow } = await supabase
+        .from('shared_projects')
+        .select('id')
+        .eq('id', id)
+        .single();
+
+      if (cloudRow) {
+        const result = await updateCloudProject(id, updates);
+        if (result.success) {
+          console.log(`[Projects] Cloud update success for ${id}`);
+          return result;
+        }
+        console.error(`[Projects] Cloud update failed for ${id}: ${result.error}`);
+        // Fall through to local
+      }
+    } catch (err) {
+      console.error(`[Projects] Supabase check failed: ${err.message}`);
+      // Fall through to local
     }
 
     // Local project
@@ -290,6 +301,7 @@ function register() {
     if (idx === -1) return { success: false, error: 'Projeto não encontrado.' };
     projects[idx] = { ...projects[idx], ...updates, updatedAt: new Date().toISOString() };
     saveLocalProjects(projects);
+    console.log(`[Projects] Local update success for ${id}`);
     return { success: true, project: projects[idx] };
   });
 
