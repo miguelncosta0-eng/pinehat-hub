@@ -337,6 +337,15 @@ Hub._seriesAnalysisProgress = function (data) {
     Hub._seriesDeepMode = false;
     Hub.showToast(`Análise profunda concluída! ${data.completed}/${data.total} episódios`);
     if (Hub.state.activeSection === 'series') Hub.renderSeries();
+  } else if (bar && data.phase === 'transcribing') {
+    bar.classList.add('visible');
+    const pctVal = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+    if (barPhase) barPhase.textContent = data.detail || `A transcrever ${data.episodeCode}...`;
+    if (barFill) barFill.style.width = `${pctVal}%`;
+    if (barPct) barPct.textContent = `${pctVal}%`;
+  } else if (bar && data.phase === 'transcribe-done') {
+    bar.classList.remove('visible');
+    Hub.showToast(`Transcrição completa! ${data.completed}/${data.total} episódios`);
   }
 
   // Only update series-specific DOM if on series page
