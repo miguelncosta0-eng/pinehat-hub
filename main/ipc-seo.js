@@ -72,17 +72,40 @@ Important guidelines:
 - Tags should include a mix of: exact match keywords, broad topic tags, long-tail variations, related/trending terms, and channel-specific tags
 - All content must be in ${lang}`;
 
-      const result = await callAI(settings.elevateLabsApiKey, model, systemPrompt, userPrompt, 4096);
+      const result = await callAI(settings.elevateLabsApiKey, model, systemPrompt, userPrompt, 8192);
 
       const text = result.content?.[0]?.text || '';
 
-      // Parse JSON from response
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return { success: false, error: 'Invalid AI response. Please try again.' };
+      // Robust JSON extraction: handle markdown code blocks, trailing content, etc.
+      let seoResult;
+      try {
+        // 1) Try extracting from ```json ... ``` markdown code blocks
+        const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+        if (codeBlockMatch) {
+          seoResult = JSON.parse(codeBlockMatch[1].trim());
+        }
+      } catch (_e) { /* fall through */ }
+
+      if (!seoResult) {
+        try {
+          // 2) Try regex to find the first JSON object
+          const jsonObjMatch = text.match(/\{[\s\S]*\}/);
+          if (jsonObjMatch) {
+            seoResult = JSON.parse(jsonObjMatch[0]);
+          }
+        } catch (_e) { /* fall through */ }
       }
 
-      const seoResult = JSON.parse(jsonMatch[0]);
+      if (!seoResult) {
+        try {
+          // 3) Try direct parse of the full response
+          seoResult = JSON.parse(text.trim());
+        } catch (_e) { /* fall through */ }
+      }
+
+      if (!seoResult) {
+        return { success: false, error: 'Invalid AI response. Please try again.' };
+      }
 
       // Validate the structure
       if (!seoResult.titles || !seoResult.description || !seoResult.tags) {
