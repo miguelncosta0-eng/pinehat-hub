@@ -829,6 +829,7 @@ Use only episode codes and timestamps that exist in the database above. No expla
   // ═══════════════════════════════════════════════════════════
 
   ipcMain.handle('series-transcribe-all', async (_event, { seriesId }) => {
+    try {
     const settings = getSettings();
     if (!settings.openaiApiKey) return { success: false, error: 'OpenAI API key não configurada nas Definições.' };
 
@@ -838,9 +839,13 @@ Use only episode codes and timestamps that exist in the database above. No expla
 
     if (!fs.existsSync(TRANSCRIPTS_DIR)) fs.mkdirSync(TRANSCRIPTS_DIR, { recursive: true });
 
+    analysisCancelled = false; // Reset cancel flag
+
     const episodes = series.episodes || [];
     let completed = 0;
     let failed = 0;
+
+    console.log(`[Transcribe] Starting transcription of ${episodes.length} episodes for "${series.name}"`);
 
     for (const ep of episodes) {
       if (analysisCancelled) break;
@@ -990,6 +995,10 @@ Use only episode codes and timestamps that exist in the database above. No expla
     });
 
     return { success: true, completed, failed };
+    } catch (outerErr) {
+      console.error('[Transcribe] Fatal error:', outerErr.message, outerErr.stack);
+      return { success: false, error: outerErr.message };
+    }
   });
 }
 

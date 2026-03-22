@@ -163,14 +163,18 @@ Hub._renderSeriesDetail = async function (panel, seriesId) {
     Hub._seriesDeepAnalyzeAll(seriesId, series.episodes, false); // only missing
   });
 
-  panel.querySelector('#seriesTranscribeBtn')?.addEventListener('click', async () => {
+  panel.querySelector('#seriesTranscribeBtn')?.addEventListener('click', () => {
     Hub.showToast('A transcrever episódios com Whisper API...');
-    const result = await window.api.seriesTranscribeAll({ seriesId });
-    if (result.success) {
-      Hub.showToast(`Transcrição completa! ${result.completed} episódios, ${result.failed} falhas.`);
-    } else {
-      Hub.showToast(result.error || 'Erro na transcrição', 'error');
-    }
+    // Fire and forget — progress via gen-bar
+    window.api.seriesTranscribeAll({ seriesId }).then(result => {
+      if (result.success) {
+        Hub.showToast(`Transcrição completa! ${result.completed} episódios, ${result.failed} falhas.`);
+      } else {
+        Hub.showToast(result.error || 'Erro na transcrição', 'error');
+      }
+    }).catch(err => {
+      Hub.showToast(`Erro: ${err.message || err}`, 'error');
+    });
   });
 
   panel.querySelector('#seriesSaveCharacters')?.addEventListener('click', async () => {
