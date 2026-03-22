@@ -658,6 +658,7 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
   }
 
   const useEmbeddings = embeddingsCache && segmentEmbeddings;
+  let lastMGTime = -480; // force first MG to be possible from the start
   console.log(`[SmartEditor] Planning for ${segments.length} segments (embeddings: ${useEmbeddings ? 'YES' : 'NO'})`);
 
   for (let i = 0; i < segments.length; i++) {
@@ -674,8 +675,22 @@ async function generateEditorialPlan(segments, sceneDB, seriesName, characters, 
     });
 
     // Check for motion graphic trigger — insert as separate black-bg segment
-    const mgEffect = detectEffect(seg.text);
+    // Force a motion graphic every ~8 minutes (480s) even without keyword trigger
+    const MG_INTERVAL = 480; // 8 minutes
+    const timeSinceLastMG = seg.startTime - (lastMGTime || -MG_INTERVAL);
+    let mgEffect = detectEffect(seg.text);
+
+    // If no keyword trigger but enough time passed, force a typewriter with key phrase
+    if (!mgEffect && timeSinceLastMG >= MG_INTERVAL && segDuration >= 3) {
+      const words = seg.text.split(/\s+/);
+      const keyPhrase = words.slice(0, Math.min(5, words.length)).join(' ').replace(/[^a-zA-Z0-9\s',.-]/g, '');
+      if (keyPhrase.length > 3) {
+        mgEffect = { type: 'typewriter', text: keyPhrase };
+      }
+    }
+
     if (mgEffect && segDuration >= 3) {
+      lastMGTime = seg.startTime;
       // Use 2-3 seconds for the motion graphic, rest for normal clips
       const mgDuration = Math.min(3, segDuration * 0.4);
 
