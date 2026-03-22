@@ -5,7 +5,6 @@ const { spawn } = require('child_process');
 const { DATA_DIR, readJson, writeJson, uuid, ensureDataDir } = require('./ipc-data');
 const { getSettings } = require('./ipc-settings');
 const { CHAT_BASE } = require('./elevate-api');
-const { findBinary, runFfmpeg, probeDuration } = require('./whisper-utils');
 
 const SERIES_FILE = path.join(DATA_DIR, 'series.json');
 const FRAMES_DIR  = path.join(DATA_DIR, 'series_frames');
@@ -874,8 +873,9 @@ Use only episode codes and timestamps that exist in the database above. No expla
         const tmpDir = path.join(require('os').tmpdir(), `pinehat-transcript-${Date.now()}`);
         fs.mkdirSync(tmpDir, { recursive: true });
 
-        const duration = await probeDuration(ep.filePath);
-        const ffmpegPath = findBinary('ffmpeg');
+        const whisperUtils = require('./whisper-utils');
+        const duration = await whisperUtils.probeDuration(ep.filePath);
+        const ffmpegPath = whisperUtils.findBinary('ffmpeg');
 
         // Split into 20-min chunks for Whisper API (25MB limit)
         const chunkDuration = 20 * 60;
@@ -888,7 +888,7 @@ Use only episode codes and timestamps that exist in the database above. No expla
           const chunkPath = path.join(tmpDir, `chunk_${c}.mp3`);
 
           // Extract audio chunk
-          await runFfmpeg(ffmpegPath, [
+          await whisperUtils.runFfmpeg(ffmpegPath, [
             '-y', '-i', ep.filePath, '-ss', String(startSec), '-t', String(chunkDuration),
             '-ac', '1', '-ab', '64k', '-ar', '16000', '-vn', chunkPath,
           ], null, 300000);
