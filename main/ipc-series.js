@@ -834,7 +834,8 @@ Use only episode codes and timestamps that exist in the database above. No expla
     if (!settings.openaiApiKey) return { success: false, error: 'OpenAI API key não configurada nas Definições.' };
 
     const data = getSeries();
-    const series = data.series.find(s => s.id === seriesId);
+    const seriesList = data.series || data || [];
+    const series = (Array.isArray(seriesList) ? seriesList : []).find(s => s.id === seriesId);
     if (!series) return { success: false, error: 'Série não encontrada.' };
 
     if (!fs.existsSync(TRANSCRIPTS_DIR)) fs.mkdirSync(TRANSCRIPTS_DIR, { recursive: true });
