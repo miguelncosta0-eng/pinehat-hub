@@ -109,6 +109,11 @@ contextBridge.exposeInMainWorld('api', {
   seriesResetAnalysis: (id) => ipcRenderer.invoke('series-reset-analysis', id),
   seriesTranscribeAll: (opts) => ipcRenderer.invoke('series-transcribe-all', opts),
   seriesDiagnose: (id) => ipcRenderer.invoke('series-diagnose', id),
+
+  // ── Video Generator ──
+  videoGeneratorGenerate: (opts) => ipcRenderer.invoke('video-generator-generate', opts),
+  videoGeneratorCancel: () => ipcRenderer.invoke('video-generator-cancel'),
+  onVideoGeneratorProgress: (cb) => ipcRenderer.on('video-generator-progress', (_, d) => cb(d)),
   seriesTraceOne: (id) => ipcRenderer.invoke('series-trace-one', id),
   onSeriesAnalyzeProgress: (cb) => ipcRenderer.on('series-analyze-progress', (_, d) => cb(d)),
 

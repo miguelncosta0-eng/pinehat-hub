@@ -25,6 +25,7 @@ function createWindow() {
   require('./main/ipc-settings').register();
   require('./main/ipc-library').register(mainWindow);
   require('./main/ipc-broll').register();
+  require('./main/ipc-video-generator').register();
   require('./main/ipc-projects').register();
   require('./main/ipc-scripts').register();
   require('./main/ipc-competitors').register();

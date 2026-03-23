@@ -90,6 +90,7 @@ Hub.renderCurrentSection = function () {
   else if (section === 'ideation' && Hub.renderIdeation) Hub.renderIdeation();
 
   else if (section === 'seo' && Hub.renderSeo) Hub.renderSeo();
+  else if (section === 'video-generator' && Hub.renderVideoGenerator) Hub.renderVideoGenerator();
   else if (section === 'settings' && Hub.renderSettings) Hub.renderSettings();
 };
 
@@ -107,6 +108,7 @@ Hub.renderSidebar = function () {
     { id: 'series', label: 'Séries', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' },
     { id: 'ideation', label: 'Ideation', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>' },
     { id: 'seo', label: 'SEO Generator', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/></svg>' },
+    { id: 'video-generator', label: 'Video Generator', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>' },
   ];
 
   nav.innerHTML = sections.map((s) => `
