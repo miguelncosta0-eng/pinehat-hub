@@ -96,6 +96,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Series ──
   seriesGetAll: () => ipcRenderer.invoke('series-get-all'),
+  getSeries: () => ipcRenderer.invoke('series-get-all'),
   seriesSelectFolder: () => ipcRenderer.invoke('series-select-folder'),
   seriesAdd: (opts) => ipcRenderer.invoke('series-add', opts),
   seriesRemove: (id) => ipcRenderer.invoke('series-remove', id),
